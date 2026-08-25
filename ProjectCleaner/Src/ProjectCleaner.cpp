@@ -51,6 +51,19 @@
 #define RS_LIBDEL_ERRORS	30	// "Failed to delete: "
 #define RS_LIBDEL_NOTHING	31	// "Nothing to delete."
 #define RS_LIBDEL_KEPT		32	// ".gsm files kept on disk."
+#define RS_DUP_TITLE		33	// duplicates scan finished title
+#define RS_DUP_TOTAL		34	// "Total embedded parts: "
+#define RS_DUP_GROUPS		35	// "Duplicate groups: "
+#define RS_DUP_NONE			36	// "No duplicates found."
+#define RS_DUP_USED			37	// "used"
+#define RS_DUP_UNUSED		38	// "NOT used"
+#define RS_DUP_HINT			39	// "Unused duplicates can be deleted via menu item 4."
+#define RS_BROKEN_TITLE		40	// broken references report title
+#define RS_BROKEN_CHECKED	41	// "Elements checked: "
+#define RS_BROKEN_COUNT		42	// "Broken references: "
+#define RS_BROKEN_NONE		43	// "No broken references."
+#define RS_BROKEN_LIST		44	// "List:"
+#define RS_BROKEN_MISSING	45	// "missing library part (index "
 
 // =============================================================================
 // Resource helpers
@@ -217,29 +230,19 @@ static GSErrCode	GetEmbeddedLibraryLocation (IO::Location* embeddedLocation, boo
 	return NoError;
 }
 
-static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
-											  UIndex* totalEmbedded,
-											  GS::Array<GS::UniString>* unusedNames,
-											  GS::Array<IO::Location>* unusedLocations,
-											  bool* hasEmbedded)
+struct EmbeddedLibPartInfo {
+	Int32				index;
+	GS::UniString		name;
+	IO::Location		location;
+};
+
+static GSErrCode	CollectEmbeddedLibParts (GS::Array<EmbeddedLibPartInfo>* embeddedParts,
+											 UIndex* totalParts,
+											 bool* hasEmbedded)
 {
 	*totalParts = 0;
-	*totalEmbedded = 0;
 	*hasEmbedded = false;
-	unusedNames->Clear ();
-	unusedLocations->Clear ();
-
-	GS::Array<Int32> usedLibInds;
-	CollectUsedLibInds (API_ObjectID,	[] (const API_Element& e) { return e.object.libInd; },					&usedLibInds);
-	CollectUsedLibInds (API_LampID,		[] (const API_Element& e) { return e.lamp.libInd; },					&usedLibInds);
-	CollectUsedLibInds (API_DoorID,		[] (const API_Element& e) { return e.door.openingBase.libInd; },		&usedLibInds);
-	CollectUsedLibInds (API_WindowID,	[] (const API_Element& e) { return e.window.openingBase.libInd; },		&usedLibInds);
-	CollectUsedLibInds (API_SkylightID,	[] (const API_Element& e) { return e.skylight.openingBase.libInd; },	&usedLibInds);
-	CollectUsedLibInds (API_ZoneID,		[] (const API_Element& e) { return e.zone.libInd; },					&usedLibInds);
-	CollectUsedLibInds (API_LabelID,	[] (const API_Element& e) {
-							return (e.label.labelClass == APILblClass_Symbol) ? e.label.u.symbol.libInd : 0; },
-						&usedLibInds);
-	CollectUsedLibInds (API_DrawingID,	[] (const API_Element& e) { return e.drawing.title.libInd; },			&usedLibInds);
+	embeddedParts->Clear ();
 
 	IO::Location embeddedLocation;
 	GSErrCode err = GetEmbeddedLibraryLocation (&embeddedLocation, hasEmbedded);
@@ -261,20 +264,54 @@ static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
 			continue;
 
 		(*totalParts)++;
-		bool isEmbedded = (libPart.location != nullptr && embeddedLocation.IsAncestorOf (*libPart.location));
-		if (isEmbedded) {
-			(*totalEmbedded)++;
-			if (!usedLibInds.Contains (i)) {
-				GS::UniString name (libPart.docu_UName);
-				if (name.IsEmpty ())
-					name = GS::UniString (libPart.file_UName);
-				unusedNames->Push (name);
-				if (libPart.location != nullptr)
-					unusedLocations->Push (IO::Location (*libPart.location));
-			}
+		if (libPart.location != nullptr && embeddedLocation.IsAncestorOf (*libPart.location)) {
+			EmbeddedLibPartInfo info;
+			info.index = i;
+			info.name = GS::UniString (libPart.docu_UName);
+			if (info.name.IsEmpty ())
+				info.name = GS::UniString (libPart.file_UName);
+			info.location = *libPart.location;
+			embeddedParts->Push (info);
 		}
 		if (libPart.location != nullptr)
 			delete libPart.location;
+	}
+	return NoError;
+}
+
+static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
+											  UIndex* totalEmbedded,
+											  GS::Array<GS::UniString>* unusedNames,
+											  GS::Array<IO::Location>* unusedLocations,
+											  bool* hasEmbedded)
+{
+	*totalEmbedded = 0;
+	unusedNames->Clear ();
+	unusedLocations->Clear ();
+
+	GS::Array<Int32> usedLibInds;
+	CollectUsedLibInds (API_ObjectID,	[] (const API_Element& e) { return e.object.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_LampID,		[] (const API_Element& e) { return e.lamp.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_DoorID,		[] (const API_Element& e) { return e.door.openingBase.libInd; },		&usedLibInds);
+	CollectUsedLibInds (API_WindowID,	[] (const API_Element& e) { return e.window.openingBase.libInd; },		&usedLibInds);
+	CollectUsedLibInds (API_SkylightID,	[] (const API_Element& e) { return e.skylight.openingBase.libInd; },	&usedLibInds);
+	CollectUsedLibInds (API_ZoneID,		[] (const API_Element& e) { return e.zone.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_LabelID,	[] (const API_Element& e) {
+							return (e.label.labelClass == APILblClass_Symbol) ? e.label.u.symbol.libInd : 0; },
+						&usedLibInds);
+	CollectUsedLibInds (API_DrawingID,	[] (const API_Element& e) { return e.drawing.title.libInd; },			&usedLibInds);
+
+	GS::Array<EmbeddedLibPartInfo> embeddedParts;
+	GSErrCode err = CollectEmbeddedLibParts (&embeddedParts, totalParts, hasEmbedded);
+	if (err != NoError)
+		return err;
+
+	for (const EmbeddedLibPartInfo& info : embeddedParts) {
+		(*totalEmbedded)++;
+		if (!usedLibInds.Contains (info.index)) {
+			unusedNames->Push (info.name);
+			unusedLocations->Push (info.location);
+		}
 	}
 	return NoError;
 }
@@ -411,6 +448,231 @@ static GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 	return NoError;
 }
 
+// "name(12)" -> "name", "Name.gsm" -> "Name" (base name for duplicate grouping)
+static GS::UniString	GetDuplicateBaseName (const GS::UniString& name)
+{
+	GS::UniString result = name;
+
+	if (result.GetLength () > 4 && result.ToLowerCase ().EndsWith (".gsm"))
+		result.Truncate (result.GetLength () - 4);
+
+	UIndex len = result.GetLength ();
+	if (len >= 3 && result[len - 1] == ')') {
+		UIndex openPos = len - 2;
+		while (openPos > 0 && result[openPos].IsDigit ())
+			openPos--;
+		if (openPos < len - 2 && openPos > 0 && result[openPos] == '(')
+			result.Truncate (openPos);
+	}
+	return result;
+}
+
+static GSErrCode Do_ScanDuplicateLibParts (void)
+{
+	UIndex totalParts = 0;
+	bool hasEmbedded = false;
+	GS::Array<EmbeddedLibPartInfo> embeddedParts;
+	GSErrCode err = CollectEmbeddedLibParts (&embeddedParts, &totalParts, &hasEmbedded);
+	if (err != NoError)
+		return err;
+
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_DUP_TITLE);
+	if (!hasEmbedded) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_LIB_NO_LIBRARY)), true);
+		return NoError;
+	}
+
+	// Which embedded parts are referenced by placed elements
+	GS::Array<Int32> usedLibInds;
+	CollectUsedLibInds (API_ObjectID,	[] (const API_Element& e) { return e.object.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_LampID,		[] (const API_Element& e) { return e.lamp.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_DoorID,		[] (const API_Element& e) { return e.door.openingBase.libInd; },		&usedLibInds);
+	CollectUsedLibInds (API_WindowID,	[] (const API_Element& e) { return e.window.openingBase.libInd; },		&usedLibInds);
+	CollectUsedLibInds (API_SkylightID,	[] (const API_Element& e) { return e.skylight.openingBase.libInd; },	&usedLibInds);
+	CollectUsedLibInds (API_ZoneID,		[] (const API_Element& e) { return e.zone.libInd; },					&usedLibInds);
+	CollectUsedLibInds (API_LabelID,	[] (const API_Element& e) {
+							return (e.label.labelClass == APILblClass_Symbol) ? e.label.u.symbol.libInd : 0; },
+						&usedLibInds);
+	CollectUsedLibInds (API_DrawingID,	[] (const API_Element& e) { return e.drawing.title.libInd; },			&usedLibInds);
+
+	// Group by base name (O(n^2) is fine for embedded library sizes)
+	GS::Array<GS::UniString> groupBaseNames;
+	GS::Array<GS::Array<UIndex>> groups;
+	for (UIndex i = 0; i < embeddedParts.GetSize (); i++) {
+		GS::UniString base = GetDuplicateBaseName (embeddedParts[i].name);
+		bool found = false;
+		for (UIndex g = 0; g < groupBaseNames.GetSize (); g++) {
+			if (groupBaseNames[g] == base) {
+				groups[g].Push (i);
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			groupBaseNames.Push (base);
+			GS::Array<UIndex> newGroup;
+			newGroup.Push (i);
+			groups.Push (newGroup);
+		}
+	}
+
+	GS::Array<GS::Array<UIndex>> duplicateGroups;
+	for (const GS::Array<UIndex>& group : groups) {
+		if (group.GetSize () >= 2)
+			duplicateGroups.Push (group);
+	}
+
+	GS::UniString report = GetResString (STR_RES_REPORT, RS_DUP_TOTAL);
+	AppendNumber (report, embeddedParts.GetSize ());
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_DUP_GROUPS));
+	AppendNumber (report, duplicateGroups.GetSize ());
+
+	if (duplicateGroups.IsEmpty ()) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_DUP_NONE));
+	} else {
+		report.Append ("\n");
+		for (const GS::Array<UIndex>& group : duplicateGroups) {
+			report.Append ("\n- ");
+			report.Append (groupBaseNames[group[0]]);
+			report.Append (": ");
+			AppendNumber (report, group.GetSize ());
+			for (UIndex memberIdx : group) {
+				const EmbeddedLibPartInfo& member = embeddedParts[memberIdx];
+				report.Append ("\n    - ");
+				report.Append (member.name);
+				report.Append (" [");
+				report.Append (GetResString (STR_RES_REPORT, usedLibInds.Contains (member.index) ? RS_DUP_USED : RS_DUP_UNUSED));
+				report.Append ("]");
+			}
+		}
+		report.Append ("\n\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_DUP_HINT));
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
+
+struct LibElemRef {
+	Int32				libInd;
+	API_Guid			elemGuid;
+	API_ElemTypeID		elemType;
+};
+
+static void	CollectLibRefs (API_ElemTypeID elemType,
+							const std::function<Int32 (const API_Element&)>& getLibInd,
+							GS::Array<LibElemRef>* refs)
+{
+	GS::Array<API_Guid> elemList;
+	if (ACAPI_Element_GetElemList (elemType, &elemList) != NoError)
+		return;
+
+	for (const API_Guid& elemGuid : elemList) {
+		API_Element element;
+		BNZeroMemory (&element, sizeof (API_Element));
+		element.header.guid = elemGuid;
+		if (ACAPI_Element_Get (&element) != NoError)
+			continue;
+		Int32 libInd = getLibInd (element);
+		if (libInd > 0) {
+			LibElemRef ref;
+			ref.libInd = libInd;
+			ref.elemGuid = elemGuid;
+			ref.elemType = elemType;
+			refs->Push (ref);
+		}
+	}
+}
+
+static GS::UniString	GetElemTypeName (API_ElemTypeID elemType)
+{
+	switch (elemType) {
+		case API_ObjectID:		return "Объект";
+		case API_LampID:		return "Светильник";
+		case API_DoorID:		return "Дверь";
+		case API_WindowID:		return "Окно";
+		case API_SkylightID:	return "Мансардное окно";
+		case API_ZoneID:		return "Зона";
+		case API_LabelID:		return "Выноска";
+		case API_DrawingID:		return "Чертёж";
+		default:				break;
+	}
+	return GS::UniString::Printf ("type %d", (int) elemType);
+}
+
+static GSErrCode Do_ReportBrokenLibRefs (void)
+{
+	GS::Array<LibElemRef> refs;
+	CollectLibRefs (API_ObjectID,	[] (const API_Element& e) { return e.object.libInd; },					&refs);
+	CollectLibRefs (API_LampID,		[] (const API_Element& e) { return e.lamp.libInd; },					&refs);
+	CollectLibRefs (API_DoorID,		[] (const API_Element& e) { return e.door.openingBase.libInd; },		&refs);
+	CollectLibRefs (API_WindowID,	[] (const API_Element& e) { return e.window.openingBase.libInd; },		&refs);
+	CollectLibRefs (API_SkylightID,	[] (const API_Element& e) { return e.skylight.openingBase.libInd; },	&refs);
+	CollectLibRefs (API_ZoneID,		[] (const API_Element& e) { return e.zone.libInd; },					&refs);
+	CollectLibRefs (API_LabelID,	[] (const API_Element& e) {
+						return (e.label.labelClass == APILblClass_Symbol) ? e.label.u.symbol.libInd : 0; },
+					&refs);
+	CollectLibRefs (API_DrawingID,	[] (const API_Element& e) { return e.drawing.title.libInd; },			&refs);
+
+	GS::Array<LibElemRef> brokenRefs;
+	GS::Array<Int32> checkedInds;
+	for (const LibElemRef& ref : refs) {
+		if (checkedInds.Contains (ref.libInd))
+			continue;
+		checkedInds.Push (ref.libInd);
+
+		API_LibPart libPart;
+		BNZeroMemory (&libPart, sizeof (API_LibPart));
+		libPart.index = ref.libInd;
+		bool isBroken = (ACAPI_LibPart_Get (&libPart) != NoError || libPart.missingDef);
+		if (isBroken) {
+			for (const LibElemRef& r : refs) {
+				if (r.libInd == ref.libInd)
+					brokenRefs.Push (r);
+			}
+		}
+		if (libPart.location != nullptr)
+			delete libPart.location;
+	}
+
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_BROKEN_TITLE);
+	GS::UniString report = GetResString (STR_RES_REPORT, RS_BROKEN_CHECKED);
+	AppendNumber (report, refs.GetSize ());
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_BROKEN_COUNT));
+	AppendNumber (report, brokenRefs.GetSize ());
+
+	if (brokenRefs.IsEmpty ()) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_BROKEN_NONE));
+	} else {
+		report.Append ("\n\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_BROKEN_LIST));
+		const UInt32 maxRefsToList = 40;
+		UInt32 listed = 0;
+		for (const LibElemRef& ref : brokenRefs) {
+			if (listed >= maxRefsToList) {
+				report.Append ("\n...");
+				break;
+			}
+			report.Append ("\n- ");
+			report.Append (GetElemTypeName (ref.elemType));
+			report.Append (" ");
+			report.Append (APIGuidToString (ref.elemGuid));
+			report.Append (" — ");
+			report.Append (GetResString (STR_RES_REPORT, RS_BROKEN_MISSING));
+			AppendNumber (report, (UIndex) ref.libInd);
+			report.Append (")");
+			listed++;
+		}
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
+
 // =============================================================================
 // Commands
 // =============================================================================
@@ -527,7 +789,9 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 2:		return Do_DeleteUnusedViews ();
 		case 3:		return Do_ScanEmbeddedLibrary ();
 		case 4:		return Do_DeleteUnusedEmbeddedLibParts ();
-		case 6:		return Do_About ();
+		case 5:		return Do_ScanDuplicateLibParts ();
+		case 6:		return Do_ReportBrokenLibRefs ();
+		case 8:		return Do_About ();
 		default:	break;
 	}
 	return NoError;

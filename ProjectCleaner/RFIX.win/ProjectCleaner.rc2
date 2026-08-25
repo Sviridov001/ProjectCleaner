@@ -1,0 +1,8 @@
+/* *****************************************************************************
+// Resource description for the Project Cleaner Add-On
+// ****************************************************************************/
+
+#include "ProjectCleaner.grc.rc2"
+#include "ProjectCleanerFix.grc.rc2"
+
+1	ICON	LOADONCALL MOVEABLE IMPURE  ACAP.ico

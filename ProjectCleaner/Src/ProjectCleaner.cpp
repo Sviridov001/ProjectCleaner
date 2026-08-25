@@ -9,6 +9,9 @@
 #include	"APIdefs_LibraryParts.h"
 #include	"DG.h"
 
+#include	"Folder.hpp"
+#include	"Name.hpp"
+
 #include	<functional>
 
 // =============================================================================
@@ -64,6 +67,7 @@
 #define RS_BROKEN_NONE		43	// "No broken references."
 #define RS_BROKEN_LIST		44	// "List:"
 #define RS_BROKEN_MISSING	45	// "missing library part (index "
+#define RS_FOLDERS_DELETED	46	// "Empty folders deleted: "
 
 // =============================================================================
 // Resource helpers
@@ -279,6 +283,43 @@ static GSErrCode	CollectEmbeddedLibParts (GS::Array<EmbeddedLibPartInfo>* embedd
 	return NoError;
 }
 
+// Recursively delete folders that became empty inside the embedded library.
+// Bottom-up traversal; the root folder itself is never deleted.
+static UInt32	DeleteEmptyLibFoldersRecursive (const IO::Location& folderLoc)
+{
+	UInt32 deletedCount = 0;
+	GS::Array<IO::Name> subFolderNames;
+	{
+		IO::Folder folder (folderLoc);
+		if (folder.GetStatus () != NoError)
+			return 0;
+		folder.Enumerate ([&subFolderNames] (const IO::Name& name, bool isFolder) {
+			if (isFolder)
+				subFolderNames.Push (name);
+		});
+	}
+
+	for (const IO::Name& name : subFolderNames) {
+		IO::Location subLoc (folderLoc, name);
+		deletedCount += DeleteEmptyLibFoldersRecursive (subLoc);
+
+		bool isEmpty = false;
+		{
+			IO::Folder subFolder (subLoc);
+			if (subFolder.GetStatus () == NoError)
+				subFolder.IsEmpty (&isEmpty);
+		}
+		if (isEmpty) {
+			bool keepGSM = false;
+			bool silentMode = true;
+			IO::Location subLocCopy = subLoc;
+			if (ACAPI_Environment (APIEnv_DeleteEmbeddedLibItemID, &subLocCopy, (void*)(size_t)keepGSM, (void*)(size_t)silentMode) == NoError)
+				deletedCount++;
+		}
+	}
+	return deletedCount;
+}
+
 static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
 											  UIndex* totalEmbedded,
 											  GS::Array<GS::UniString>* unusedNames,
@@ -440,6 +481,21 @@ static GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 	if (deleted == 0 && failed == 0) {
 		result.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_NOTHING));
 	}
+
+	// Clean up folders that became empty after the deletion
+	if (deleted > 0) {
+		IO::Location embeddedRootLoc;
+		bool hasEmbeddedRoot = false;
+		if (GetEmbeddedLibraryLocation (&embeddedRootLoc, &hasEmbeddedRoot) == NoError && hasEmbeddedRoot) {
+			UInt32 deletedFolders = DeleteEmptyLibFoldersRecursive (embeddedRootLoc);
+			if (deletedFolders > 0) {
+				result.Append ("\n");
+				result.Append (GetResString (STR_RES_REPORT, RS_FOLDERS_DELETED));
+				AppendNumber (result, deletedFolders);
+			}
+		}
+	}
+
 	if (keepGSM && deleted > 0) {
 		result.Append ("\n");
 		result.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_KEPT));

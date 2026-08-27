@@ -623,11 +623,11 @@ static void	CopyTextToClipboard (const GS::UniString& text)
 // =============================================================================
 
 struct HatchGroupKey {
-	short	determination;		// 0 = Drafting, 1 = Cut, 2 = Cover
-	short	fillPenIndex;
+	API_AttributeIndex	fillInd;
+	short				fillPenIndex;
 
 	bool operator== (const HatchGroupKey& other) const {
-		return determination == other.determination && fillPenIndex == other.fillPenIndex;
+		return fillInd == other.fillInd && fillPenIndex == other.fillPenIndex;
 	}
 };
 
@@ -668,7 +668,21 @@ static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double an
 	return true;
 }
 
-static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo& memo)
+static bool	PointInsideContour (const API_Coord& pt,
+							   const API_ElementMemo& memo, Int32 start, Int32 end)
+{
+	bool inside = false;
+	for (Int32 i = start, j = end; i <= end; j = i++) {
+		const API_Coord& a = (*memo.coords)[i];
+		const API_Coord& b = (*memo.coords)[j];
+		if (((a.y > pt.y) != (b.y > pt.y)) &&
+			(pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x))
+			inside = !inside;
+	}
+	return inside;
+}
+
+static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo& memo, GS::UniString* debugOut)
 {
 	Int32 nCoords = hatch.poly.nCoords;
 	Int32 nSubPolys = hatch.poly.nSubPolys;
@@ -677,83 +691,85 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
 		return 0.0;
 
-	// Mark vertices that lie on an arc interior (between begIndex+1 and endIndex-1).
-	// API_PolyArc uses 1-based coords indexing; memo.parcs is 0-based.
-	GS::HashSet<Int32> arcInterior;
-	if (nArcs > 0 && memo.parcs != nullptr) {
-		for (Int32 a = 0; a < nArcs; a++) {
-			const API_PolyArc& arc = (*memo.parcs)[a];
-			Int32 beg = arc.begIndex;
-			Int32 end = arc.endIndex;
-			if (beg >= 1 && end >= 1 && beg < end) {
-				for (Int32 idx = beg + 1; idx < end; idx++)
-					arcInterior.Add (idx);
-			}
-		}
-	}
+	if (debugOut)
+		*debugOut = GS::UniString::Printf ("coords=%d subPolys=%d arcs=%d", (int)nCoords, (int)nSubPolys, (int)nArcs);
 
 	double totalArea = 0.0;
 	Int32 subPolyStart = 1;
+
+	// First pass: compute area per contour
+	GS::Array<double> contourAreas;
+	GS::Array<Int32> contourStarts, contourEnds;
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
 		Int32 subPolyEnd = (*memo.pends)[sp];
+		contourStarts.Push (subPolyStart);
+		contourEnds.Push (subPolyEnd);
 
-		GS::Array<API_Coord> corners;
-		GS::Array<Int32> cornerOrigIdx;
-		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
-			if (!arcInterior.Contains (i)) {
-				cornerOrigIdx.Push (i);
-				corners.Push ((*memo.coords)[i]);
-			}
-		}
-
-		// Shoelace (straight chords between corner points)
 		double area = 0.0;
-		Int32 nc = corners.GetSize ();
-		for (Int32 k = 0; k < nc; k++) {
-			const API_Coord& p1 = corners[k];
-			const API_Coord& p2 = corners[(k + 1) % nc];
+		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
+			const API_Coord& p1 = (*memo.coords)[i];
+			const API_Coord& p2 = (*memo.coords)[i < subPolyEnd ? i + 1 : subPolyStart];
 			area += (p2.x + p1.x) * (p2.y - p1.y) * 0.5;
 		}
 
-		// Add exact circular segment for each arc of this subpoly
 		if (nArcs > 0 && memo.parcs != nullptr) {
 			for (Int32 a = 0; a < nArcs; a++) {
 				const API_PolyArc& arc = (*memo.parcs)[a];
 				if (arc.begIndex >= subPolyStart && arc.endIndex <= subPolyEnd) {
-					Int32 cBeg = -1, cEnd = -1;
-					for (UIndex k = 0; k < cornerOrigIdx.GetSize (); k++) {
-						if (cornerOrigIdx[k] == arc.begIndex) cBeg = static_cast<Int32>(k);
-						if (cornerOrigIdx[k] == arc.endIndex) cEnd = static_cast<Int32>(k);
-					}
-					if (cBeg >= 0 && cEnd >= 0) {
-						const API_Coord& A = corners[cBeg];
-						const API_Coord& B = corners[cEnd];
-						API_Coord centre;
-						if (ArcGetOrigo (A, B, arc.arcAngle, centre)) {
-							double radius = sqrt ((centre.x - B.x) * (centre.x - B.x) +
-												  (centre.y - B.y) * (centre.y - B.y));
-							area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
-						}
+					const API_Coord& A = (*memo.coords)[arc.begIndex];
+					const API_Coord& B = (*memo.coords)[arc.endIndex];
+					API_Coord centre;
+					if (ArcGetOrigo (A, B, arc.arcAngle, centre)) {
+						double radius = sqrt ((centre.x - B.x) * (centre.x - B.x) +
+											  (centre.y - B.y) * (centre.y - B.y));
+						area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
 					}
 				}
 			}
 		}
 
-		totalArea += area;
+		contourAreas.Push (area);
 		subPolyStart = subPolyEnd + 1;
+	}
+
+	// Second pass: determine add/subtract via point-in-polygon
+	for (Int32 sp = 0; sp < static_cast<Int32>(contourAreas.GetSize ()); sp++) {
+		// Test first vertex of this contour against all previous contours
+		API_Coord testPt = (*memo.coords)[contourStarts[sp]];
+		bool insidePrev = false;
+		for (Int32 prev = 0; prev < sp; prev++) {
+			if (PointInsideContour (testPt, memo, contourStarts[prev], contourEnds[prev])) {
+				insidePrev = !insidePrev;  // XOR: inside odd number of previous = hole
+			}
+		}
+
+		if (insidePrev)
+			totalArea -= fabs (contourAreas[sp]);
+		else
+			totalArea += fabs (contourAreas[sp]);
+
+		if (debugOut) {
+			*debugOut += GS::UniString::Printf ("\n  sp%d[%d..%d] raw=%.4f -> %s",
+				(int)(sp + 1), (int)contourStarts[sp], (int)contourEnds[sp],
+				contourAreas[sp], insidePrev ? "SUBTRACT" : "ADD");
+		}
 	}
 
 	return fabs (totalArea);
 }
 
-static GS::UniString	GetHatchTypeName (short determination)
+static GS::UniString	GetFillName (API_AttributeIndex fillInd)
 {
-	switch (determination) {
-		case 0:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_0));
-		case 1:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_1));
-		case 2:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_2));
-		default:	return GS::UniString::Printf ("%d", (int) determination);
+	API_Attribute attr;
+	BNZeroMemory (&attr, sizeof (API_Attribute));
+	attr.header.index = fillInd;
+	attr.header.typeID = API_FilltypeID;
+	if (ACAPI_Attribute_Get (&attr) == NoError) {
+		if (attr.filltype.head.uniStringNamePtr != nullptr)
+			return *attr.filltype.head.uniStringNamePtr;
+		return GS::UniString (attr.filltype.head.name);
 	}
+	return GS::UniString::Printf ("#%d", static_cast<int>(fillInd));
 }
 
 static GSErrCode Do_CalcHatchAreas (void)
@@ -794,15 +810,15 @@ static GSErrCode Do_CalcHatchAreas (void)
 		if (err != NoError)
 			continue;
 
-		double hatchArea = CalcPolygonArea (elem.hatch, memo);
+		double hatchArea = CalcPolygonArea (elem.hatch, memo, nullptr);
 		ACAPI_DisposeElemMemoHdls (&memo);
 
 		if (hatchArea < 1e-10)
 			continue;
 
-		// Group by determination + fillPen
+		// Group by fill pattern + pen
 		HatchGroupKey key;
-		key.determination = elem.hatch.determination;
+		key.fillInd = elem.hatch.fillInd;
 		key.fillPenIndex = elem.hatch.fillPen.penIndex;
 
 		bool found = false;
@@ -833,26 +849,31 @@ static GSErrCode Do_CalcHatchAreas (void)
 	}
 
 	GS::UniString report;
+	GS::UniString clip;		// tab-separated for Excel
 
 	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
-		GS::UniString typeName = GetHatchTypeName (groupKeys[g].determination);
-		GS::UniString penStr = GetResString (STR_RES_REPORT, RS_HATCH_PEN);
-		AppendNumber (penStr, (UIndex) groupKeys[g].fillPenIndex);
-
-		GS::UniString countStr;
-		AppendNumber (countStr, groupData[g].count);
-
+		GS::UniString fillName = GetFillName (groupKeys[g].fillInd);
 		GS::UniString areaStr = GS::UniString::Printf ("%.2f", groupData[g].area);
 
 		report.Append ("- ");
-		report.Append (typeName);
+		report.Append (fillName);
 		report.Append (", ");
-		report.Append (penStr);
+		report.Append (GetResString (STR_RES_REPORT, RS_HATCH_PEN));
+		report.Append (GS::UniString::Printf ("%d", (int) groupKeys[g].fillPenIndex));
 		report.Append (": ");
-		report.Append (countStr);
+		AppendNumber (report, groupData[g].count);
 		report.Append (" шт., ");
 		report.Append (areaStr);
 		report.Append (" м²\n");
+
+		clip.Append (fillName);
+		clip.Append ("\t");
+		clip.Append (GS::UniString::Printf ("%d", (int) groupKeys[g].fillPenIndex));
+		clip.Append ("\t");
+		AppendNumber (clip, groupData[g].count);
+		clip.Append ("\t");
+		clip.Append (areaStr);
+		clip.Append ("\n");
 	}
 
 	report.Append ("\n");
@@ -863,9 +884,14 @@ static GSErrCode Do_CalcHatchAreas (void)
 	report.Append (GS::UniString::Printf ("%.2f", totalArea));
 	report.Append (" м²");
 
+	clip.Append ("\t\t");
+	AppendNumber (clip, totalHatches);
+	clip.Append ("\t");
+	clip.Append (GS::UniString::Printf ("%.2f", totalArea));
+
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
 	ACAPI_WriteReport (fullReport, true);
-	CopyTextToClipboard (fullReport);
+	CopyTextToClipboard (clip);
 	return NoError;
 }
 

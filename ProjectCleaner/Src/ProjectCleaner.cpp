@@ -15,6 +15,8 @@
 #include	<functional>
 #include	<cmath>
 
+#include	"Windows.h"
+
 // =============================================================================
 // Resource IDs
 // =============================================================================
@@ -836,6 +838,24 @@ static GSErrCode Do_DeleteUnusedViews (void)
 	return NoError;
 }
 
+static void	CopyTextToClipboard (const GS::UniString& text)
+{
+	if (!OpenClipboard (nullptr))
+		return;
+	EmptyClipboard ();
+	Int32 len = text.GetLength ();
+	HGLOBAL hMem = GlobalAlloc (GMEM_MOVEABLE, (len + 1) * sizeof (wchar_t));
+	if (hMem != nullptr) {
+		wchar_t* pMem = (wchar_t*) GlobalLock (hMem);
+		for (Int32 i = 0; i < len; i++)
+			pMem[i] = text[i];
+		pMem[len] = 0;
+		GlobalUnlock (hMem);
+		SetClipboardData (CF_UNICODETEXT, hMem);
+	}
+	CloseClipboard ();
+}
+
 // =============================================================================
 // Hatch area calculator
 // =============================================================================
@@ -854,16 +874,14 @@ struct HatchGroupData {
 	double	area;		// m²
 };
 
-static double	CalcPolygonAreaWithArcs (const API_HatchType& hatch, const API_ElementMemo& memo)
+static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo& memo)
 {
 	Int32 nCoords = hatch.poly.nCoords;
 	Int32 nSubPolys = hatch.poly.nSubPolys;
-	Int32 nArcs = hatch.poly.nArcs;
 
 	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
 		return 0.0;
 
-	// Shoelace formula (signed area)
 	double area = 0.0;
 	Int32 subPolyStart = 1;
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
@@ -875,52 +893,6 @@ static double	CalcPolygonAreaWithArcs (const API_HatchType& hatch, const API_Ele
 		}
 		area += 0.5 * subArea;
 		subPolyStart = subPolyEnd + 1;
-	}
-
-	// Arc segment corrections
-	if (nArcs > 0 && memo.parcs != nullptr) {
-		for (Int32 a = 0; a < nArcs; a++) {
-			const API_PolyArc& arc = (*memo.parcs)[a];
-			if (arc.begIndex < 1 || arc.begIndex > nCoords ||
-				arc.endIndex < 1 || arc.endIndex > nCoords)
-				continue;
-
-			API_Coord A = (*memo.coords)[arc.begIndex];
-			API_Coord B = (*memo.coords)[arc.endIndex];
-
-			double dx = B.x - A.x;
-			double dy = B.y - A.y;
-			double chord = sqrt (dx * dx + dy * dy);
-			if (chord < 1e-10)
-				continue;
-
-			double theta = fabs (arc.arcAngle);
-			if (theta < 1e-10 || theta > 2.0 * 3.14159265358979)
-				continue;
-
-			double R = chord / (2.0 * sin (theta / 2.0));
-			double segmentArea = R * R * (theta - sin (theta)) / 2.0;
-
-			// Find circle center
-			double mx = (A.x + B.x) / 2.0;
-			double my = (A.y + B.y) / 2.0;
-			double d = chord / 2.0;
-			double h = sqrt (R * R - d * d);
-			double nx = -dy / chord;
-			double ny = dx / chord;
-
-			// Two candidate centers
-			double cx1 = mx + h * nx;
-			double cy1 = my + h * ny;
-
-			// Determine sign via cross product AB × OA
-			double OAx = A.x - cx1;
-			double OAy = A.y - cy1;
-			double cross = dx * OAy - dy * OAx;
-
-			double sign = (cross * arc.arcAngle > 0) ? 1.0 : -1.0;
-			area += sign * segmentArea;
-		}
 	}
 
 	return fabs (area);
@@ -974,7 +946,7 @@ static GSErrCode Do_CalcHatchAreas (void)
 		if (err != NoError)
 			continue;
 
-		double hatchArea = CalcPolygonAreaWithArcs (elem.hatch, memo);
+		double hatchArea = CalcPolygonArea (elem.hatch, memo);
 		ACAPI_DisposeElemMemoHdls (&memo);
 
 		if (hatchArea < 1e-10)
@@ -1013,12 +985,6 @@ static GSErrCode Do_CalcHatchAreas (void)
 	}
 
 	GS::UniString report;
-	report.Append (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_0));
-	report.Append ("...");		// column header hint
-
-	// Simple formatted table
-	const UInt32 maxNameLen = 16;
-	report.Append ("\n");
 
 	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
 		GS::UniString typeName = GetHatchTypeName (groupKeys[g].determination);
@@ -1030,7 +996,6 @@ static GSErrCode Do_CalcHatchAreas (void)
 
 		GS::UniString areaStr = GS::UniString::Printf ("%.2f", groupData[g].area);
 
-		// Format: "TypeName | Pen N | count | area"
 		report.Append ("- ");
 		report.Append (typeName);
 		report.Append (", ");
@@ -1050,7 +1015,9 @@ static GSErrCode Do_CalcHatchAreas (void)
 	report.Append (GS::UniString::Printf ("%.2f", totalArea));
 	report.Append (" м²");
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	GS::UniString fullReport = FormatSafe (title + "\n" + report);
+	ACAPI_WriteReport (fullReport, true);
+	CopyTextToClipboard (fullReport);
 	return NoError;
 }
 

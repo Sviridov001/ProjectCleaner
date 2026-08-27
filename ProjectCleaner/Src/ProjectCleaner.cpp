@@ -13,6 +13,7 @@
 #include	"Name.hpp"
 
 #include	<functional>
+#include	<cmath>
 
 // =============================================================================
 // Resource IDs
@@ -68,6 +69,15 @@
 #define RS_BROKEN_LIST		44	// "List:"
 #define RS_BROKEN_MISSING	45	// "missing library part (index "
 #define RS_FOLDERS_DELETED	46	// "Empty folders deleted: "
+#define RS_HATCH_TITLE		47	// hatch area report title
+#define RS_HATCH_NO_SEL		48	// "No hatches selected."
+#define RS_HATCH_TYPE_0		49	// "Drafting"
+#define RS_HATCH_TYPE_1		50	// "Cut"
+#define RS_HATCH_TYPE_2		51	// "Cover"
+#define RS_HATCH_PEN		52	// "Pen "
+#define RS_HATCH_COUNT		53	// "Count"
+#define RS_HATCH_AREA		54	// "Area, m²"
+#define RS_HATCH_TOTAL		55	// "TOTAL"
 
 // =============================================================================
 // Resource helpers
@@ -826,6 +836,224 @@ static GSErrCode Do_DeleteUnusedViews (void)
 	return NoError;
 }
 
+// =============================================================================
+// Hatch area calculator
+// =============================================================================
+
+struct HatchGroupKey {
+	short	determination;		// 0 = Drafting, 1 = Cut, 2 = Cover
+	short	fillPenIndex;
+
+	bool operator== (const HatchGroupKey& other) const {
+		return determination == other.determination && fillPenIndex == other.fillPenIndex;
+	}
+};
+
+struct HatchGroupData {
+	UInt32	count;
+	double	area;		// m²
+};
+
+static double	CalcPolygonAreaWithArcs (const API_HatchType& hatch, const API_ElementMemo& memo)
+{
+	Int32 nCoords = hatch.poly.nCoords;
+	Int32 nSubPolys = hatch.poly.nSubPolys;
+	Int32 nArcs = hatch.poly.nArcs;
+
+	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
+		return 0.0;
+
+	// Shoelace formula (signed area)
+	double area = 0.0;
+	Int32 subPolyStart = 1;
+	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
+		Int32 subPolyEnd = (*memo.pends)[sp];
+		double subArea = 0.0;
+		for (Int32 i = subPolyStart; i < subPolyEnd; i++) {
+			subArea += (*memo.coords)[i].x * (*memo.coords)[i + 1].y;
+			subArea -= (*memo.coords)[i + 1].x * (*memo.coords)[i].y;
+		}
+		area += 0.5 * subArea;
+		subPolyStart = subPolyEnd + 1;
+	}
+
+	// Arc segment corrections
+	if (nArcs > 0 && memo.parcs != nullptr) {
+		for (Int32 a = 0; a < nArcs; a++) {
+			const API_PolyArc& arc = (*memo.parcs)[a];
+			if (arc.begIndex < 1 || arc.begIndex > nCoords ||
+				arc.endIndex < 1 || arc.endIndex > nCoords)
+				continue;
+
+			API_Coord A = (*memo.coords)[arc.begIndex];
+			API_Coord B = (*memo.coords)[arc.endIndex];
+
+			double dx = B.x - A.x;
+			double dy = B.y - A.y;
+			double chord = sqrt (dx * dx + dy * dy);
+			if (chord < 1e-10)
+				continue;
+
+			double theta = fabs (arc.arcAngle);
+			if (theta < 1e-10 || theta > 2.0 * 3.14159265358979)
+				continue;
+
+			double R = chord / (2.0 * sin (theta / 2.0));
+			double segmentArea = R * R * (theta - sin (theta)) / 2.0;
+
+			// Find circle center
+			double mx = (A.x + B.x) / 2.0;
+			double my = (A.y + B.y) / 2.0;
+			double d = chord / 2.0;
+			double h = sqrt (R * R - d * d);
+			double nx = -dy / chord;
+			double ny = dx / chord;
+
+			// Two candidate centers
+			double cx1 = mx + h * nx;
+			double cy1 = my + h * ny;
+
+			// Determine sign via cross product AB × OA
+			double OAx = A.x - cx1;
+			double OAy = A.y - cy1;
+			double cross = dx * OAy - dy * OAx;
+
+			double sign = (cross * arc.arcAngle > 0) ? 1.0 : -1.0;
+			area += sign * segmentArea;
+		}
+	}
+
+	return fabs (area);
+}
+
+static GS::UniString	GetHatchTypeName (short determination)
+{
+	switch (determination) {
+		case 0:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_0));
+		case 1:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_1));
+		case 2:		return GS::UniString (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_2));
+		default:	return GS::UniString::Printf ("%d", (int) determination);
+	}
+}
+
+static GSErrCode Do_CalcHatchAreas (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_HATCH_TITLE);
+
+	// 1. Get selection
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL)), true);
+		return NoError;
+	}
+
+	// 2. Filter hatches and calculate areas
+	GS::Array<HatchGroupKey> groupKeys;
+	GS::Array<HatchGroupData> groupData;
+	UInt32 totalHatches = 0;
+	double totalArea = 0.0;
+
+	for (const API_Neig& neig : selNeigs) {
+		if (neig.neigID != APINeig_Hatch)
+			continue;
+
+		API_Element elem;
+		BNZeroMemory (&elem, sizeof (API_Element));
+		elem.header.guid = neig.guid;
+		if (ACAPI_Element_Get (&elem) != NoError)
+			continue;
+		if (elem.header.type != API_HatchID)
+			continue;
+
+		API_ElementMemo memo;
+		BNZeroMemory (&memo, sizeof (API_ElementMemo));
+		err = ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_All);
+		if (err != NoError)
+			continue;
+
+		double hatchArea = CalcPolygonAreaWithArcs (elem.hatch, memo);
+		ACAPI_DisposeElemMemoHdls (&memo);
+
+		if (hatchArea < 1e-10)
+			continue;
+
+		// Group by determination + fillPen
+		HatchGroupKey key;
+		key.determination = elem.hatch.determination;
+		key.fillPenIndex = elem.hatch.fillPen.penIndex;
+
+		bool found = false;
+		for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
+			if (groupKeys[g] == key) {
+				groupData[g].count++;
+				groupData[g].area += hatchArea;
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			groupKeys.Push (key);
+			HatchGroupData data;
+			data.count = 1;
+			data.area = hatchArea;
+			groupData.Push (data);
+		}
+
+		totalHatches++;
+		totalArea += hatchArea;
+	}
+
+	// 3. Build report
+	if (totalHatches == 0) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL)), true);
+		return NoError;
+	}
+
+	GS::UniString report;
+	report.Append (GetResString (STR_RES_REPORT, RS_HATCH_TYPE_0));
+	report.Append ("...");		// column header hint
+
+	// Simple formatted table
+	const UInt32 maxNameLen = 16;
+	report.Append ("\n");
+
+	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
+		GS::UniString typeName = GetHatchTypeName (groupKeys[g].determination);
+		GS::UniString penStr = GetResString (STR_RES_REPORT, RS_HATCH_PEN);
+		AppendNumber (penStr, (UIndex) groupKeys[g].fillPenIndex);
+
+		GS::UniString countStr;
+		AppendNumber (countStr, groupData[g].count);
+
+		GS::UniString areaStr = GS::UniString::Printf ("%.2f", groupData[g].area);
+
+		// Format: "TypeName | Pen N | count | area"
+		report.Append ("- ");
+		report.Append (typeName);
+		report.Append (", ");
+		report.Append (penStr);
+		report.Append (": ");
+		report.Append (countStr);
+		report.Append (" шт., ");
+		report.Append (areaStr);
+		report.Append (" м²\n");
+	}
+
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_HATCH_TOTAL));
+	report.Append (": ");
+	AppendNumber (report, totalHatches);
+	report.Append (" шт., ");
+	report.Append (GS::UniString::Printf ("%.2f", totalArea));
+	report.Append (" м²");
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
+
 static GSErrCode Do_About (void)
 {
 	GS::UniString title = GetResString (STR_RES_ADDON_INFO, 1);
@@ -847,7 +1075,8 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 4:		return Do_DeleteUnusedEmbeddedLibParts ();
 		case 5:		return Do_ScanDuplicateLibParts ();
 		case 6:		return Do_ReportBrokenLibRefs ();
-		case 8:		return Do_About ();
+		case 7:		return Do_CalcHatchAreas ();
+		case 9:		return Do_About ();
 		default:	break;
 	}
 	return NoError;

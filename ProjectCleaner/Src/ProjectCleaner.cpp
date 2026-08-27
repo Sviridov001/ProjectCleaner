@@ -677,39 +677,64 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
 		return 0.0;
 
-	double area = 0.0;
+	// Mark vertices that lie on an arc interior (between arc.begIndex+1 and arc.endIndex-1).
+	// These are approximation points and must be excluded from the corner list.
+	GS::HashSet<Int32> arcInterior;
+	if (nArcs > 0 && memo.parcs != nullptr) {
+		for (Int32 a = 1; a <= nArcs; a++) {
+			const API_PolyArc& arc = (*memo.parcs)[a];
+			for (Int32 idx = arc.begIndex + 1; idx < arc.endIndex; idx++)
+				arcInterior.Add (idx);
+		}
+	}
+
+	double totalArea = 0.0;
 	Int32 subPolyStart = 1;
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
 		Int32 subPolyEnd = (*memo.pends)[sp];
-		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
-			Int32 next = (i < subPolyEnd) ? i + 1 : subPolyStart;
-			double begX = (*memo.coords)[i].x;
-			double begY = (*memo.coords)[i].y;
-			double endX = (*memo.coords)[next].x;
-			double endY = (*memo.coords)[next].y;
-			area += (endX + begX) * (endY - begY) * 0.5;
 
-			if (nArcs > 0 && memo.parcs != nullptr) {
-				for (Int32 a = 1; a <= nArcs; a++) {
-					const API_PolyArc& arc = (*memo.parcs)[a];
-					if (arc.begIndex == i && arc.endIndex == next) {
-						API_Coord begEdge = { begX, begY };
-						API_Coord endEdge = { endX, endY };
-						API_Coord centre;
-						if (ArcGetOrigo (begEdge, endEdge, arc.arcAngle, centre)) {
-							double radius = sqrt ((centre.x - endEdge.x) * (centre.x - endEdge.x) +
-												  (centre.y - endEdge.y) * (centre.y - endEdge.y));
-							area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
-						}
-						break;
+		// Collect corner points (skip arc interior approximation points)
+		GS::Array<API_Coord> corners;
+		GS::HashTable<Int32, Int32> coordToCorner;
+		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
+			if (!arcInterior.Contains (i)) {
+				coordToCorner.Add (i, corners.GetSize ());
+				corners.Push ((*memo.coords)[i]);
+			}
+		}
+
+		// Shoelace (straight chords between corner points)
+		double area = 0.0;
+		Int32 nc = corners.GetSize ();
+		for (Int32 k = 0; k < nc; k++) {
+			const API_Coord& p1 = corners[k];
+			const API_Coord& p2 = corners[(k + 1) % nc];
+			area += (p2.x + p1.x) * (p2.y - p1.y) * 0.5;
+		}
+
+		// Add exact circular segment for each arc of this subpoly
+		if (nArcs > 0 && memo.parcs != nullptr) {
+			for (Int32 a = 1; a <= nArcs; a++) {
+				const API_PolyArc& arc = (*memo.parcs)[a];
+				if (arc.begIndex >= subPolyStart && arc.endIndex <= subPolyEnd &&
+					coordToCorner.ContainsKey (arc.begIndex) && coordToCorner.ContainsKey (arc.endIndex)) {
+					const API_Coord& A = corners[coordToCorner.Get (arc.begIndex)];
+					const API_Coord& B = corners[coordToCorner.Get (arc.endIndex)];
+					API_Coord centre;
+					if (ArcGetOrigo (A, B, arc.arcAngle, centre)) {
+						double radius = sqrt ((centre.x - B.x) * (centre.x - B.x) +
+											  (centre.y - B.y) * (centre.y - B.y));
+						area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
 					}
 				}
 			}
 		}
+
+		totalArea += area;
 		subPolyStart = subPolyEnd + 1;
 	}
 
-	return fabs (area);
+	return fabs (totalArea);
 }
 
 static GS::UniString	GetHatchTypeName (short determination)

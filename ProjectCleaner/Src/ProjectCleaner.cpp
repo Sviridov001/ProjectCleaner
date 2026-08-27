@@ -677,14 +677,18 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
 		return 0.0;
 
-	// Mark vertices that lie on an arc interior (between arc.begIndex+1 and arc.endIndex-1).
-	// These are approximation points and must be excluded from the corner list.
+	// Mark vertices that lie on an arc interior (between begIndex+1 and endIndex-1).
+	// API_PolyArc uses 1-based coords indexing; memo.parcs is 0-based.
 	GS::HashSet<Int32> arcInterior;
 	if (nArcs > 0 && memo.parcs != nullptr) {
-		for (Int32 a = 1; a <= nArcs; a++) {
+		for (Int32 a = 0; a < nArcs; a++) {
 			const API_PolyArc& arc = (*memo.parcs)[a];
-			for (Int32 idx = arc.begIndex + 1; idx < arc.endIndex; idx++)
-				arcInterior.Add (idx);
+			Int32 beg = arc.begIndex;
+			Int32 end = arc.endIndex;
+			if (beg >= 1 && end >= 1 && beg < end) {
+				for (Int32 idx = beg + 1; idx < end; idx++)
+					arcInterior.Add (idx);
+			}
 		}
 	}
 
@@ -693,12 +697,11 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
 		Int32 subPolyEnd = (*memo.pends)[sp];
 
-		// Collect corner points (skip arc interior approximation points)
 		GS::Array<API_Coord> corners;
-		GS::HashTable<Int32, Int32> coordToCorner;
+		GS::Array<Int32> cornerOrigIdx;
 		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
 			if (!arcInterior.Contains (i)) {
-				coordToCorner.Add (i, corners.GetSize ());
+				cornerOrigIdx.Push (i);
 				corners.Push ((*memo.coords)[i]);
 			}
 		}
@@ -714,17 +717,23 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 
 		// Add exact circular segment for each arc of this subpoly
 		if (nArcs > 0 && memo.parcs != nullptr) {
-			for (Int32 a = 1; a <= nArcs; a++) {
+			for (Int32 a = 0; a < nArcs; a++) {
 				const API_PolyArc& arc = (*memo.parcs)[a];
-				if (arc.begIndex >= subPolyStart && arc.endIndex <= subPolyEnd &&
-					coordToCorner.ContainsKey (arc.begIndex) && coordToCorner.ContainsKey (arc.endIndex)) {
-					const API_Coord& A = corners[coordToCorner.Get (arc.begIndex)];
-					const API_Coord& B = corners[coordToCorner.Get (arc.endIndex)];
-					API_Coord centre;
-					if (ArcGetOrigo (A, B, arc.arcAngle, centre)) {
-						double radius = sqrt ((centre.x - B.x) * (centre.x - B.x) +
-											  (centre.y - B.y) * (centre.y - B.y));
-						area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
+				if (arc.begIndex >= subPolyStart && arc.endIndex <= subPolyEnd) {
+					Int32 cBeg = -1, cEnd = -1;
+					for (UIndex k = 0; k < cornerOrigIdx.GetSize (); k++) {
+						if (cornerOrigIdx[k] == arc.begIndex) cBeg = static_cast<Int32>(k);
+						if (cornerOrigIdx[k] == arc.endIndex) cEnd = static_cast<Int32>(k);
+					}
+					if (cBeg >= 0 && cEnd >= 0) {
+						const API_Coord& A = corners[cBeg];
+						const API_Coord& B = corners[cEnd];
+						API_Coord centre;
+						if (ArcGetOrigo (A, B, arc.arcAngle, centre)) {
+							double radius = sqrt ((centre.x - B.x) * (centre.x - B.x) +
+												  (centre.y - B.y) * (centre.y - B.y));
+							area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
+						}
 					}
 				}
 			}

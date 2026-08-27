@@ -638,7 +638,9 @@ struct HatchGroupData {
 
 static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double angle, API_Coord& origo)
 {
-	if (fabs (angle) < 1e-10)
+	double halfAngle = angle / 2.0;
+	double sinHalf = sin (halfAngle);
+	if (fabs (sinHalf) < 1e-10)
 		return false;
 
 	double dx = endC.x - begC.x;
@@ -647,22 +649,20 @@ static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double an
 	if (chord < 1e-10)
 		return false;
 
-	double halfAngle = angle / 2.0;
-	double tanHalf = fabs (tan (halfAngle));
-	double dist = chord * tanHalf / 2.0;
+	double R = chord / (2.0 * sinHalf);
+	double d = R * cos (halfAngle);
 
 	double mx = (begC.x + endC.x) / 2.0;
 	double my = (begC.y + endC.y) / 2.0;
-
 	double nx = -dy / chord;
 	double ny = dx / chord;
 
 	if (halfAngle > 0.0) {
-		origo.x = mx + dist * nx;
-		origo.y = my + dist * ny;
+		origo.x = mx + d * nx;
+		origo.y = my + d * ny;
 	} else {
-		origo.x = mx - dist * nx;
-		origo.y = my - dist * ny;
+		origo.x = mx - d * nx;
+		origo.y = my - d * ny;
 	}
 
 	return true;

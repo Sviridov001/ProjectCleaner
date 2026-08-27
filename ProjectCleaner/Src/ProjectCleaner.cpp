@@ -636,10 +636,43 @@ struct HatchGroupData {
 	double	area;		// m²
 };
 
+static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double angle, API_Coord& origo)
+{
+	if (fabs (angle) < 1e-10)
+		return false;
+
+	double dx = endC.x - begC.x;
+	double dy = endC.y - begC.y;
+	double chord = sqrt (dx * dx + dy * dy);
+	if (chord < 1e-10)
+		return false;
+
+	double halfAngle = angle / 2.0;
+	double tanHalf = fabs (tan (halfAngle));
+	double dist = chord * tanHalf / 2.0;
+
+	double mx = (begC.x + endC.x) / 2.0;
+	double my = (begC.y + endC.y) / 2.0;
+
+	double nx = -dy / chord;
+	double ny = dx / chord;
+
+	if (halfAngle > 0.0) {
+		origo.x = mx + dist * nx;
+		origo.y = my + dist * ny;
+	} else {
+		origo.x = mx - dist * nx;
+		origo.y = my - dist * ny;
+	}
+
+	return true;
+}
+
 static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo& memo)
 {
 	Int32 nCoords = hatch.poly.nCoords;
 	Int32 nSubPolys = hatch.poly.nSubPolys;
+	Int32 nArcs = hatch.poly.nArcs;
 
 	if (nCoords < 3 || memo.coords == nullptr || memo.pends == nullptr)
 		return 0.0;
@@ -648,12 +681,31 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	Int32 subPolyStart = 1;
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
 		Int32 subPolyEnd = (*memo.pends)[sp];
-		double subArea = 0.0;
-		for (Int32 i = subPolyStart; i < subPolyEnd; i++) {
-			subArea += (*memo.coords)[i].x * (*memo.coords)[i + 1].y;
-			subArea -= (*memo.coords)[i + 1].x * (*memo.coords)[i].y;
+		for (Int32 i = subPolyStart; i <= subPolyEnd; i++) {
+			Int32 next = (i < subPolyEnd) ? i + 1 : subPolyStart;
+			double begX = (*memo.coords)[i].x;
+			double begY = (*memo.coords)[i].y;
+			double endX = (*memo.coords)[next].x;
+			double endY = (*memo.coords)[next].y;
+			area += (endX + begX) * (endY - begY) * 0.5;
+
+			if (nArcs > 0 && memo.parcs != nullptr) {
+				for (Int32 a = 1; a <= nArcs; a++) {
+					const API_PolyArc& arc = (*memo.parcs)[a];
+					if (arc.begIndex == i && arc.endIndex == next) {
+						API_Coord begEdge = { begX, begY };
+						API_Coord endEdge = { endX, endY };
+						API_Coord centre;
+						if (ArcGetOrigo (begEdge, endEdge, arc.arcAngle, centre)) {
+							double radius = sqrt ((centre.x - endEdge.x) * (centre.x - endEdge.x) +
+												  (centre.y - endEdge.y) * (centre.y - endEdge.y));
+							area += radius * radius * (arc.arcAngle - sin (arc.arcAngle)) * 0.5;
+						}
+						break;
+					}
+				}
+			}
 		}
-		area += 0.5 * subArea;
 		subPolyStart = subPolyEnd + 1;
 	}
 

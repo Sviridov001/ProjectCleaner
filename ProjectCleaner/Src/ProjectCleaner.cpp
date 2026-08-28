@@ -919,6 +919,7 @@ static GSErrCode Do_CalcLineLengths (void)
 
 	double totalLen = 0.0;
 	UInt32 lineCount = 0;
+	GS::UniString debugInfo;
 
 	for (const API_Neig& neig : selNeigs) {
 		API_Element elem;
@@ -928,13 +929,17 @@ static GSErrCode Do_CalcLineLengths (void)
 			continue;
 
 		double len = 0.0;
+		GS::UniString typeTag;
 
 		if (elem.header.type == API_LineID) {
+			typeTag = "Line";
 			double dx = elem.line.endC.x - elem.line.begC.x;
 			double dy = elem.line.endC.y - elem.line.begC.y;
 			len = sqrt (dx * dx + dy * dy);
 
 		} else if (elem.header.type == API_ArcID) {
+			typeTag = GS::UniString::Printf ("Arc(r=%.2f,ratio=%.4f,whole=%d,beg=%.4f,end=%.4f)",
+				elem.arc.r, elem.arc.ratio, (int)elem.arc.whole, elem.arc.begAng, elem.arc.endAng);
 			double a = elem.arc.r;
 			double b = a * elem.arc.ratio;
 			double dAng = elem.arc.endAng - elem.arc.begAng;
@@ -957,25 +962,79 @@ static GSErrCode Do_CalcLineLengths (void)
 			len = sum * dt / 3.0;
 
 		} else if (elem.header.type == API_PolyLineID) {
+			typeTag = "PolyLine";
 			API_ElementMemo memo;
 			BNZeroMemory (&memo, sizeof (API_ElementMemo));
 			if (ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_Polygon) == NoError && memo.coords != nullptr) {
 				Int32 nCoords = elem.polyLine.poly.nCoords;
-				for (Int32 i = 1; i < nCoords; i++) {
-					double dx = (*memo.coords)[i + 1].x - (*memo.coords)[i].x;
-					double dy = (*memo.coords)[i + 1].y - (*memo.coords)[i].y;
-					len += sqrt (dx * dx + dy * dy);
+				Int32 nArcs = elem.polyLine.poly.nArcs;
+
+				if (nArcs > 0 && memo.parcs != nullptr) {
+					// Build set of arc interior points to skip
+					GS::HashSet<Int32> arcInterior;
+					for (Int32 a = 0; a < nArcs; a++) {
+						const API_PolyArc& arc = (*memo.parcs)[a];
+						for (Int32 idx = arc.begIndex + 1; idx < arc.endIndex; idx++)
+							arcInterior.Add (idx);
+					}
+
+					// Sum straight segments + arc segments
+					for (Int32 i = 1; i < nCoords; i++) {
+						if (arcInterior.Contains (i) || arcInterior.Contains (i + 1))
+							continue;
+						// Check if this edge is an arc
+						bool isArcEdge = false;
+						double arcLen = 0.0;
+						for (Int32 a = 0; a < nArcs; a++) {
+							const API_PolyArc& arc = (*memo.parcs)[a];
+							if (arc.begIndex == i && arc.endIndex == i + 1) {
+								isArcEdge = true;
+								const API_Coord& A = (*memo.coords)[arc.begIndex];
+								const API_Coord& B = (*memo.coords)[arc.endIndex];
+								// Use chord length as approximation for arc
+								double chord = sqrt ((B.x - A.x) * (B.x - A.x) + (B.y - A.y) * (B.y - A.y));
+								// Better: use arc angle to get exact length
+								// For now, use chord / sin(angle/2) * angle
+								double halfA = arc.arcAngle / 2.0;
+								double sinH = sin (halfA);
+								if (fabs (sinH) > 1e-10) {
+									double R = chord / (2.0 * sinH);
+									arcLen = fabs (R * arc.arcAngle);
+								} else {
+									arcLen = chord;
+								}
+								break;
+							}
+						}
+						if (isArcEdge) {
+							len += arcLen;
+						} else {
+							double dx = (*memo.coords)[i + 1].x - (*memo.coords)[i].x;
+							double dy = (*memo.coords)[i + 1].y - (*memo.coords)[i].y;
+							len += sqrt (dx * dx + dy * dy);
+						}
+					}
+				} else {
+					// Pure straight segments
+					for (Int32 i = 1; i < nCoords; i++) {
+						double dx = (*memo.coords)[i + 1].x - (*memo.coords)[i].x;
+						double dy = (*memo.coords)[i + 1].y - (*memo.coords)[i].y;
+						len += sqrt (dx * dx + dy * dy);
+					}
 				}
 				ACAPI_DisposeElemMemoHdls (&memo);
 			}
 
 		} else {
-			continue;
+			typeTag = GS::UniString::Printf ("typeID=%d", (int)elem.header.type.typeID);
 		}
 
 		if (len > 1e-10) {
 			totalLen += len;
 			lineCount++;
+			debugInfo += "\n  " + typeTag + GS::UniString::Printf (" -> %.4f", len);
+		} else {
+			debugInfo += "\n  " + typeTag + " -> 0 (skip)";
 		}
 	}
 
@@ -986,7 +1045,8 @@ static GSErrCode Do_CalcLineLengths (void)
 	}
 
 	GS::UniString report;
-	report.Append ("- ");
+	report.Append (debugInfo);
+	report.Append ("\n- ");
 	report.Append (GS::UniString::Printf ("%d", (int) lineCount));
 	report.Append (" ");
 	report.Append (GetResString (STR_RES_REPORT, RS_LINE_COUNT));

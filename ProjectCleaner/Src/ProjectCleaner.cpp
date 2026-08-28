@@ -1067,6 +1067,16 @@ GSErrCode Do_About (void)
 	return NoError;
 }
 
+GSErrCode Do_TogglePalette (void)
+{
+	ProjectCleanerPalette& palette = ProjectCleanerPalette::GetInstance ();
+	if (palette.IsVisible ())
+		palette.Hide ();
+	else
+		palette.Show ();
+	return NoError;
+}
+
 // =============================================================================
 // Menu handler
 // =============================================================================
@@ -1080,7 +1090,8 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 4:		return Do_DeleteUnusedEmbeddedLibParts ();
 		case 5:		return Do_CalcHatchAreas ();
 		case 6:		return Do_CalcLineLengths ();
-		case 8:		return Do_About ();
+		case 7:		return Do_TogglePalette ();
+		case 9:		return Do_About ();
 		default:	break;
 	}
 	return NoError;
@@ -1112,8 +1123,6 @@ GSErrCode __ACENV_CALL	Initialize (void)
 								  API_PalEnabled_InteriorElevation + API_PalEnabled_3D +
 								  API_PalEnabled_Detail + API_PalEnabled_Worksheet + API_PalEnabled_Layout +
 								  API_PalEnabled_DocumentFrom3D, GSGuid2APIGuid (ProjectCleanerPalette::PaletteGuid ()));
-
-	ProjectCleanerPalette::GetInstance ().Show ();
 
 	return err;
 }

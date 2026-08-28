@@ -919,7 +919,6 @@ static GSErrCode Do_CalcLineLengths (void)
 
 	double totalLen = 0.0;
 	UInt32 lineCount = 0;
-	GS::UniString debugInfo;
 
 	for (const API_Neig& neig : selNeigs) {
 		API_Element elem;
@@ -929,17 +928,13 @@ static GSErrCode Do_CalcLineLengths (void)
 			continue;
 
 		double len = 0.0;
-		GS::UniString typeTag;
 
 		if (elem.header.type == API_LineID) {
-			typeTag = "Line";
 			double dx = elem.line.endC.x - elem.line.begC.x;
 			double dy = elem.line.endC.y - elem.line.begC.y;
 			len = sqrt (dx * dx + dy * dy);
 
 		} else if (elem.header.type == API_ArcID) {
-			typeTag = GS::UniString::Printf ("Arc(r=%.2f,ratio=%.4f,whole=%d,beg=%.4f,end=%.4f)",
-				elem.arc.r, elem.arc.ratio, (int)elem.arc.whole, elem.arc.begAng, elem.arc.endAng);
 			double a = elem.arc.r;
 			double b = a * elem.arc.ratio;
 			double dAng;
@@ -970,7 +965,6 @@ static GSErrCode Do_CalcLineLengths (void)
 			len = fabs (sum * dt / 3.0);
 
 		} else if (elem.header.type == API_PolyLineID) {
-			typeTag = "PolyLine";
 			API_ElementMemo memo;
 			BNZeroMemory (&memo, sizeof (API_ElementMemo));
 			if (ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_Polygon) == NoError && memo.coords != nullptr) {
@@ -1032,15 +1026,12 @@ static GSErrCode Do_CalcLineLengths (void)
 			}
 
 		} else {
-			typeTag = GS::UniString::Printf ("typeID=%d", (int)elem.header.type.typeID);
+			continue;
 		}
 
 		if (len > 1e-10) {
 			totalLen += len;
 			lineCount++;
-			debugInfo += "\n  " + typeTag + GS::UniString::Printf (" -> %.4f", len);
-		} else {
-			debugInfo += "\n  " + typeTag + " -> 0 (skip)";
 		}
 	}
 
@@ -1051,8 +1042,7 @@ static GSErrCode Do_CalcLineLengths (void)
 	}
 
 	GS::UniString report;
-	report.Append (debugInfo);
-	report.Append ("\n- ");
+	report.Append ("- ");
 	report.Append (GS::UniString::Printf ("%d", (int) lineCount));
 	report.Append (" ");
 	report.Append (GetResString (STR_RES_REPORT, RS_LINE_COUNT));

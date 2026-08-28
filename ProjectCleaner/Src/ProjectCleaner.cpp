@@ -1105,12 +1105,16 @@ GSErrCode __ACENV_CALL	RegisterInterface (void)
 GSErrCode __ACENV_CALL	Initialize (void)
 {
 	GSErrCode err = ACAPI_Install_MenuHandler (MENU_RES_ID, MenuHandler);
+
 	ACAPI_RegisterModelessWindow (ProjectCleanerPalette::PaletteRefId (),
 								  ProjectCleanerPalette::PaletteAPIControlCallBack,
 								  API_PalEnabled_FloorPlan + API_PalEnabled_Section + API_PalEnabled_Elevation +
 								  API_PalEnabled_InteriorElevation + API_PalEnabled_3D +
 								  API_PalEnabled_Detail + API_PalEnabled_Worksheet + API_PalEnabled_Layout +
 								  API_PalEnabled_DocumentFrom3D, GSGuid2APIGuid (ProjectCleanerPalette::PaletteGuid ()));
+
+	ProjectCleanerPalette::GetInstance ().Show ();
+
 	return err;
 }
 

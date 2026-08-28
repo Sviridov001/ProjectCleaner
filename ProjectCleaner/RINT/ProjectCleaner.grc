@@ -88,3 +88,25 @@
 /* [ 58] */	"ИТОГО"
 /* [ 59] */	"длина, м"
 }
+
+/* ---------------------------------------------------------- Project Cleaner Palette */
+
+'GDLG' 32600  Palette | close    0    0  220  230  "Project Cleaner" {
+/* [  1] */ Button     5    5  210   28  LargePlain  "Скан неиспользуемых видов"
+/* [  2] */ Button     5   38  210   28  LargePlain  "Удалить неиспользуемые виды..."
+/* [  3] */ Button     5   71  210   28  LargePlain  "Скан встроенной библиотеки"
+/* [  4] */ Button     5  104  210   28  LargePlain  "Удалить неиспольз. библиотеку..."
+/* [  5] */ Button     5  137  210   28  LargePlain  "Площадь штриховок"
+/* [  6] */ Button     5  170  210   28  LargePlain  "Длина линий"
+/* [  7] */ Button     5  203  210   22  LargePlain  "Об аддоне"
+}
+
+'DLGH' 32600  Project_Cleaner_Palette {
+	""   Button_0
+	""   Button_1
+	""   Button_2
+	""   Button_3
+	""   Button_4
+	""   Button_5
+	""   Button_6
+}

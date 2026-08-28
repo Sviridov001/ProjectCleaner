@@ -21,6 +21,8 @@
 
 #include	"Windows.h"
 
+#include	"ProjectCleanerPalette.hpp"
+
 // =============================================================================
 // Resource IDs
 // =============================================================================
@@ -364,7 +366,7 @@ static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
 	return NoError;
 }
 
-static GSErrCode Do_ScanEmbeddedLibrary (void)
+GSErrCode Do_ScanEmbeddedLibrary (void)
 {
 	UIndex totalParts = 0;
 	UIndex totalEmbedded = 0;
@@ -415,7 +417,7 @@ static GSErrCode Do_ScanEmbeddedLibrary (void)
 	return NoError;
 }
 
-static GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
+GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 {
 	UIndex totalParts = 0;
 	UIndex totalEmbedded = 0;
@@ -515,7 +517,7 @@ static GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 // Commands
 // =============================================================================
 
-static GSErrCode Do_ScanUnusedViews (void)
+GSErrCode Do_ScanUnusedViews (void)
 {
 	UIndex totalViews = 0;
 	GS::Array<API_NavigatorItem> unusedViews;
@@ -553,7 +555,7 @@ static GSErrCode Do_ScanUnusedViews (void)
 	return NoError;
 }
 
-static GSErrCode Do_DeleteUnusedViews (void)
+GSErrCode Do_DeleteUnusedViews (void)
 {
 	UIndex totalViews = 0;
 	GS::Array<API_NavigatorItem> unusedViews;
@@ -780,7 +782,7 @@ static GS::UniString	GetFillName (API_AttributeIndex fillInd)
 	return GS::UniString::Printf ("#%d", static_cast<int>(fillInd));
 }
 
-static GSErrCode Do_CalcHatchAreas (void)
+GSErrCode Do_CalcHatchAreas (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_HATCH_TITLE);
 
@@ -903,7 +905,7 @@ static GSErrCode Do_CalcHatchAreas (void)
 	return NoError;
 }
 
-static GSErrCode Do_CalcLineLengths (void)
+GSErrCode Do_CalcLineLengths (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_LINE_TITLE);
 
@@ -1057,7 +1059,7 @@ static GSErrCode Do_CalcLineLengths (void)
 	return NoError;
 }
 
-static GSErrCode Do_About (void)
+GSErrCode Do_About (void)
 {
 	GS::UniString title = GetResString (STR_RES_ADDON_INFO, 1);
 	GS::UniString body = GetResString (STR_RES_REPORT, RS_ABOUT_BODY);
@@ -1102,10 +1104,18 @@ GSErrCode __ACENV_CALL	RegisterInterface (void)
 
 GSErrCode __ACENV_CALL	Initialize (void)
 {
-	return ACAPI_Install_MenuHandler (MENU_RES_ID, MenuHandler);
+	GSErrCode err = ACAPI_Install_MenuHandler (MENU_RES_ID, MenuHandler);
+	ACAPI_RegisterModelessWindow (ProjectCleanerPalette::PaletteRefId (),
+								  ProjectCleanerPalette::PaletteAPIControlCallBack,
+								  API_PalEnabled_FloorPlan + API_PalEnabled_Section + API_PalEnabled_Elevation +
+								  API_PalEnabled_InteriorElevation + API_PalEnabled_3D +
+								  API_PalEnabled_Detail + API_PalEnabled_Worksheet + API_PalEnabled_Layout +
+								  API_PalEnabled_DocumentFrom3D, GSGuid2APIGuid (ProjectCleanerPalette::PaletteGuid ()));
+	return err;
 }
 
 GSErrCode __ACENV_CALL	FreeData (void)
 {
+	ACAPI_UnregisterModelessWindow (ProjectCleanerPalette::PaletteRefId ());
 	return NoError;
 }

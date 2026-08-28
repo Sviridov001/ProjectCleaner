@@ -942,15 +942,23 @@ static GSErrCode Do_CalcLineLengths (void)
 				elem.arc.r, elem.arc.ratio, (int)elem.arc.whole, elem.arc.begAng, elem.arc.endAng);
 			double a = elem.arc.r;
 			double b = a * elem.arc.ratio;
-			double dAng = elem.arc.endAng - elem.arc.begAng;
-			if (elem.arc.whole)
+			double dAng;
+			if (elem.arc.whole) {
 				dAng = 2.0 * M_PI;
-			else if (dAng < 0.0)
-				dAng += 2.0 * M_PI;
-			double t0 = elem.arc.begAng;
+			} else {
+				dAng = fabs (elem.arc.endAng - elem.arc.begAng);
+				if (dAng > M_PI)
+					dAng = 2.0 * M_PI - dAng;
+			}
 
 			const Int32 N = 100;
-			double dt = dAng / N;
+			double t0 = elem.arc.begAng;
+			double step = (elem.arc.endAng - elem.arc.begAng);
+			if (elem.arc.whole)
+				step = 2.0 * M_PI;
+			else if (fabs (step) > M_PI)
+				step = (step > 0) ? -(2.0 * M_PI - fabs (step)) : (2.0 * M_PI - fabs (step));
+			double dt = step / N;
 			double sum = 0.0;
 			for (Int32 i = 0; i <= N; i++) {
 				double t = t0 + i * dt;
@@ -959,7 +967,7 @@ static GSErrCode Do_CalcLineLengths (void)
 				double dy = b * cos (t);
 				sum += w * sqrt (dx * dx + dy * dy);
 			}
-			len = sum * dt / 3.0;
+			len = fabs (sum * dt / 3.0);
 
 		} else if (elem.header.type == API_PolyLineID) {
 			typeTag = "PolyLine";
@@ -991,11 +999,9 @@ static GSErrCode Do_CalcLineLengths (void)
 								isArcEdge = true;
 								const API_Coord& A = (*memo.coords)[arc.begIndex];
 								const API_Coord& B = (*memo.coords)[arc.endIndex];
-								// Use chord length as approximation for arc
 								double chord = sqrt ((B.x - A.x) * (B.x - A.x) + (B.y - A.y) * (B.y - A.y));
-								// Better: use arc angle to get exact length
-								// For now, use chord / sin(angle/2) * angle
-								double halfA = arc.arcAngle / 2.0;
+								double halfA = fabs (arc.arcAngle) / 2.0;
+								if (halfA > M_PI) halfA = M_PI - halfA;
 								double sinH = sin (halfA);
 								if (fabs (sinH) > 1e-10) {
 									double R = chord / (2.0 * sinH);

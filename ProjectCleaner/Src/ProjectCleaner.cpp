@@ -15,6 +15,10 @@
 #include	<functional>
 #include	<cmath>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include	"Windows.h"
 
 // =============================================================================
@@ -67,6 +71,10 @@
 #define RS_HATCH_COUNT		53	// "Count"
 #define RS_HATCH_AREA		54	// "Area, m²"
 #define RS_HATCH_TOTAL		55	// "TOTAL"
+#define RS_LINE_TITLE		56	// line length report title
+#define RS_LINE_NO_SEL		57	// "No lines selected."
+#define RS_LINE_COUNT		58	// "elements: "
+#define RS_LINE_LENGTH		59	// "length, m"
 
 // =============================================================================
 // Resource helpers
@@ -895,6 +903,91 @@ static GSErrCode Do_CalcHatchAreas (void)
 	return NoError;
 }
 
+static GSErrCode Do_CalcLineLengths (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_LINE_TITLE);
+
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, RS_LINE_NO_SEL)), true);
+		return NoError;
+	}
+
+	double totalLen = 0.0;
+	UInt32 lineCount = 0;
+
+	for (const API_Neig& neig : selNeigs) {
+		API_Element elem;
+		BNZeroMemory (&elem, sizeof (API_Element));
+		elem.header.guid = neig.guid;
+		if (ACAPI_Element_Get (&elem) != NoError)
+			continue;
+
+		double len = 0.0;
+
+		if (elem.header.type == API_LineID) {
+			double dx = elem.line.endC.x - elem.line.begC.x;
+			double dy = elem.line.endC.y - elem.line.begC.y;
+			len = sqrt (dx * dx + dy * dy);
+
+		} else if (elem.header.type == API_ArcID) {
+			if (elem.arc.whole) {
+				len = 2.0 * M_PI * elem.arc.r;
+			} else {
+				double dAng = elem.arc.endAng - elem.arc.begAng;
+				if (dAng < 0.0) dAng += 2.0 * M_PI;
+				len = elem.arc.r * dAng;
+			}
+
+		} else if (elem.header.type == API_PolyLineID) {
+			API_ElementMemo memo;
+			BNZeroMemory (&memo, sizeof (API_ElementMemo));
+			if (ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_Polygon) == NoError && memo.coords != nullptr) {
+				Int32 nCoords = elem.polyLine.poly.nCoords;
+				for (Int32 i = 1; i < nCoords; i++) {
+					double dx = (*memo.coords)[i + 1].x - (*memo.coords)[i].x;
+					double dy = (*memo.coords)[i + 1].y - (*memo.coords)[i].y;
+					len += sqrt (dx * dx + dy * dy);
+				}
+				ACAPI_DisposeElemMemoHdls (&memo);
+			}
+
+		} else {
+			continue;
+		}
+
+		if (len > 1e-10) {
+			totalLen += len;
+			lineCount++;
+		}
+	}
+
+	if (lineCount == 0) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, RS_LINE_NO_SEL)), true);
+		return NoError;
+	}
+
+	GS::UniString report;
+	report.Append ("- ");
+	report.Append (GS::UniString::Printf ("%d", (int) lineCount));
+	report.Append (" ");
+	report.Append (GetResString (STR_RES_REPORT, RS_LINE_COUNT));
+	report.Append (": ");
+	report.Append (GS::UniString::Printf ("%.3f ", totalLen));
+	report.Append (GetResString (STR_RES_REPORT, RS_LINE_LENGTH));
+
+	GS::UniString fullReport = FormatSafe (title + "\n" + report);
+	ACAPI_WriteReport (fullReport, true);
+	CopyTextToClipboard (GS::UniString::Printf ("%d\t%.3f", (int) lineCount, totalLen));
+
+	return NoError;
+}
+
 static GSErrCode Do_About (void)
 {
 	GS::UniString title = GetResString (STR_RES_ADDON_INFO, 1);
@@ -915,7 +1008,8 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 3:		return Do_ScanEmbeddedLibrary ();
 		case 4:		return Do_DeleteUnusedEmbeddedLibParts ();
 		case 5:		return Do_CalcHatchAreas ();
-		case 6:		return Do_About ();
+		case 6:		return Do_CalcLineLengths ();
+		case 8:		return Do_About ();
 		default:	break;
 	}
 	return NoError;

@@ -935,13 +935,26 @@ static GSErrCode Do_CalcLineLengths (void)
 			len = sqrt (dx * dx + dy * dy);
 
 		} else if (elem.header.type == API_ArcID) {
-			if (elem.arc.whole) {
-				len = 2.0 * M_PI * elem.arc.r;
-			} else {
-				double dAng = elem.arc.endAng - elem.arc.begAng;
-				if (dAng < 0.0) dAng += 2.0 * M_PI;
-				len = elem.arc.r * dAng;
+			double a = elem.arc.r;
+			double b = a * elem.arc.ratio;
+			double dAng = elem.arc.endAng - elem.arc.begAng;
+			if (elem.arc.whole)
+				dAng = 2.0 * M_PI;
+			else if (dAng < 0.0)
+				dAng += 2.0 * M_PI;
+			double t0 = elem.arc.begAng;
+
+			const Int32 N = 100;
+			double dt = dAng / N;
+			double sum = 0.0;
+			for (Int32 i = 0; i <= N; i++) {
+				double t = t0 + i * dt;
+				double w = (i == 0 || i == N) ? 1.0 : (i % 2 == 0) ? 2.0 : 4.0;
+				double dx = -a * sin (t);
+				double dy = b * cos (t);
+				sum += w * sqrt (dx * dx + dy * dy);
 			}
+			len = sum * dt / 3.0;
 
 		} else if (elem.header.type == API_PolyLineID) {
 			API_ElementMemo memo;

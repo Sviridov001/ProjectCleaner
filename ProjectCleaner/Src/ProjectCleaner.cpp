@@ -1110,7 +1110,7 @@ API_AddonType __ACENV_CALL	CheckEnvironment (API_EnvirParams* envir)
 
 GSErrCode __ACENV_CALL	RegisterInterface (void)
 {
-	return ACAPI_Register_Menu (MENU_RES_ID, 0, MenuCode_UserDef, MenuFlag_SeparatorBefore);
+	return ACAPI_Register_Menu (MENU_RES_ID, 32502, MenuCode_UserDef, MenuFlag_SeparatorBefore);
 }
 
 GSErrCode __ACENV_CALL	Initialize (void)

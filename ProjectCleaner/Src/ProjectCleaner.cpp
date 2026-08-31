@@ -77,6 +77,29 @@
 #define RS_LINE_NO_SEL		57	// "No lines selected."
 #define RS_LINE_COUNT		58	// "elements: "
 #define RS_LINE_LENGTH		59	// "length, m"
+#define RS_LAYER_TITLE		60	// layer scan title
+#define RS_LAYER_TOTAL		61	// "Total layers: "
+#define RS_LAYER_UNUSED		62	// "Unused layers: "
+#define RS_LAYER_LIST		63	// "Candidates:"
+#define RS_LAYER_NONE		64	// "No unused layers found."
+#define RS_LAYER_HIDDEN		65	// " (hidden)"
+#define RS_LAYER_LOCKED		66	// " (locked)"
+#define RS_LAYER_WARNING	67	// deletion warning
+#define RS_LAYERDEL_TITLE	68	// delete confirmation title
+#define RS_LAYERDEL_COUNT	69	// "Layers to delete: "
+#define RS_LAYERDEL_DONE	70	// "Deleted layers: "
+#define RS_LAYERDEL_FAIL	71	// "Failed to delete: "
+#define RS_LAYERDEL_NOTHING	72	// "Nothing to delete."
+#define RS_STAT_TITLE		73	// statistics title
+#define RS_STAT_TOTAL		74	// "Total elements: "
+#define RS_STAT_BY_TYPE		75	// "By type:"
+#define RS_STAT_LAYERS		76	// "Layers: "
+#define RS_LAYERDEL_RENAME	77	// rename title
+#define RS_LAYERDEL_RENAMED	78	// "Renamed layers: "
+#define RS_LAYERDEL_RENFAIL	79	// "Failed to rename: "
+#define RS_LAYER_PROMPT_MSG	80	// "Add _null_ prefix?"
+#define RS_LAYER_PROMPT_YES	81	// "Add prefix"
+#define RS_LAYER_PROMPT_NO	82	// "No, report only"
 
 // =============================================================================
 // Resource helpers
@@ -366,7 +389,7 @@ static GSErrCode	ScanUnusedEmbeddedLibParts (UIndex* totalParts,
 	return NoError;
 }
 
-GSErrCode Do_ScanEmbeddedLibrary (void)
+GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 {
 	UIndex totalParts = 0;
 	UIndex totalEmbedded = 0;
@@ -383,6 +406,7 @@ GSErrCode Do_ScanEmbeddedLibrary (void)
 		return NoError;
 	}
 
+	// Report
 	GS::UniString report = GetResString (STR_RES_REPORT, RS_LIB_TOTAL);
 	AppendNumber (report, totalParts);
 	report.Append ("\n");
@@ -395,56 +419,38 @@ GSErrCode Do_ScanEmbeddedLibrary (void)
 	if (unusedNames.IsEmpty ()) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_LIB_NONE));
-	} else {
-		const UInt32 maxNamesToList = 40;
 		report.Append ("\n\n");
-		report.Append (GetResString (STR_RES_REPORT, RS_LIB_LIST_HEADER));
-		UInt32 listed = 0;
-		for (const GS::UniString& name : unusedNames) {
-			if (listed >= maxNamesToList) {
-				report.Append ("\n...");
-				break;
-			}
-			report.Append ("\n- ");
-			report.Append (name);
-			listed++;
+		report.Append (GetResString (STR_RES_REPORT, RS_LIB_WARNING));
+		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		return NoError;
+	}
+
+	const UInt32 maxNamesToList = 40;
+	report.Append ("\n\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_LIB_LIST_HEADER));
+	UInt32 listed = 0;
+	for (const GS::UniString& name : unusedNames) {
+		if (listed >= maxNamesToList) {
+			report.Append ("\n...");
+			break;
 		}
+		report.Append ("\n- ");
+		report.Append (name);
+		listed++;
 	}
 	report.Append ("\n\n");
 	report.Append (GetResString (STR_RES_REPORT, RS_LIB_WARNING));
-
 	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
-	return NoError;
-}
 
-GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
-{
-	UIndex totalParts = 0;
-	UIndex totalEmbedded = 0;
-	GS::Array<GS::UniString> unusedNames;
-	GS::Array<IO::Location> unusedLocations;
-	bool hasEmbedded = false;
-	GSErrCode err = ScanUnusedEmbeddedLibParts (&totalParts, &totalEmbedded, &unusedNames, &unusedLocations, &hasEmbedded);
-	if (err != NoError)
-		return err;
-
-	GS::UniString title = GetResString (STR_RES_REPORT, RS_LIBDEL_TITLE);
-	if (!hasEmbedded) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_LIB_NO_LIBRARY)), true);
-		return NoError;
-	}
-	if (unusedNames.IsEmpty ()) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_LIBDEL_NOTHING)), true);
-		return NoError;
-	}
-
+	// Confirm delete
 	GS::UniString confirmText = GetResString (STR_RES_REPORT, RS_LIBDEL_COUNT);
 	AppendNumber (confirmText, unusedNames.GetSize ());
 	confirmText.Append ("\n\n");
 	confirmText.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_WARNING));
 
+	GS::UniString confirmTitle = GetResString (STR_RES_REPORT, RS_LIBDEL_TITLE);
 	short button = DGAlert (DG_WARNING,
-							title,
+							confirmTitle,
 							confirmText,
 							GS::UniString (),
 							GetResString (STR_RES_REPORT, RS_LIBDEL_KEEP),
@@ -463,7 +469,7 @@ GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 
 	err = ACAPI_Environment (APIEnv_DeleteEmbeddedLibItemsID, &locations, (void*)(size_t)keepGSM, (void*)(size_t)silentMode);
 
-	// Verification scan to count actual deleted parts
+	// Verification scan
 	UIndex totalPartsAfter = 0;
 	UIndex totalEmbeddedAfter = 0;
 	GS::Array<GS::UniString> unusedNamesAfter;
@@ -491,7 +497,6 @@ GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 		result.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_NOTHING));
 	}
 
-	// Clean up folders that became empty after the deletion
 	if (deleted > 0) {
 		IO::Location embeddedRootLoc;
 		bool hasEmbeddedRoot = false;
@@ -509,7 +514,7 @@ GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 		result.Append ("\n");
 		result.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_KEPT));
 	}
-	ACAPI_WriteReport (FormatSafe (title + "\n" + result), true);
+	ACAPI_WriteReport (FormatSafe (confirmTitle + "\n" + result), true);
 	return NoError;
 }
 
@@ -517,7 +522,7 @@ GSErrCode Do_DeleteUnusedEmbeddedLibParts (void)
 // Commands
 // =============================================================================
 
-GSErrCode Do_ScanUnusedViews (void)
+GSErrCode Do_ScanDeleteUnusedViews (void)
 {
 	UIndex totalViews = 0;
 	GS::Array<API_NavigatorItem> unusedViews;
@@ -525,6 +530,8 @@ GSErrCode Do_ScanUnusedViews (void)
 	if (err != NoError)
 		return err;
 
+	// Report
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_SCAN_TITLE);
 	GS::UniString report = GetResString (STR_RES_REPORT, RS_TOTAL_VIEWS);
 	AppendNumber (report, totalViews);
 	report.Append ("\n");
@@ -534,42 +541,26 @@ GSErrCode Do_ScanUnusedViews (void)
 	if (unusedViews.IsEmpty ()) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_NO_PROBLEM));
-	} else {
-		const UInt32 maxNamesToList = 40;
-		report.Append ("\n\n");
-		report.Append (GetResString (STR_RES_REPORT, RS_LIST_HEADER));
-		UInt32 listed = 0;
-		for (const API_NavigatorItem& view : unusedViews) {
-			if (listed >= maxNamesToList) {
-				report.Append ("\n...");
-				break;
-			}
-			report.Append ("\n- ");
-			report.Append (GS::UniString (view.uName));
-			listed++;
-		}
-	}
-
-	GS::UniString title = GetResString (STR_RES_REPORT, RS_SCAN_TITLE);
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
-	return NoError;
-}
-
-GSErrCode Do_DeleteUnusedViews (void)
-{
-	UIndex totalViews = 0;
-	GS::Array<API_NavigatorItem> unusedViews;
-	GSErrCode err = ScanUnusedViews (&totalViews, &unusedViews);
-	if (err != NoError)
-		return err;
-
-	if (unusedViews.IsEmpty ()) {
-		GS::UniString title = GetResString (STR_RES_REPORT, RS_DELETE_TITLE);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_NOTHING_DELETE)), true);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
 		return NoError;
 	}
 
-	// Confirmation (the operation is NOT undoable!)
+	const UInt32 maxNamesToList = 40;
+	report.Append ("\n\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_LIST_HEADER));
+	UInt32 listed = 0;
+	for (const API_NavigatorItem& view : unusedViews) {
+		if (listed >= maxNamesToList) {
+			report.Append ("\n...");
+			break;
+		}
+		report.Append ("\n- ");
+		report.Append (GS::UniString (view.uName));
+		listed++;
+	}
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+
+	// Confirm delete
 	GS::UniString confirmText = GetResString (STR_RES_REPORT, RS_DELETE_COUNT);
 	AppendNumber (confirmText, unusedViews.GetSize ());
 	confirmText.Append ("\n\n");
@@ -585,7 +576,7 @@ GSErrCode Do_DeleteUnusedViews (void)
 	if (button != 1)
 		return NoError;
 
-	// Delete views (non-undoable operation)
+	// Delete
 	UInt32 deleted = 0;
 	UInt32 failed = 0;
 	bool silentMode = true;
@@ -605,8 +596,7 @@ GSErrCode Do_DeleteUnusedViews (void)
 		result.Append (GetResString (STR_RES_REPORT, RS_DELETE_ERRORS));
 		AppendNumber (result, failed);
 	}
-	GS::UniString resultTitle = GetResString (STR_RES_REPORT, RS_DELETE_TITLE);
-	ACAPI_WriteReport (FormatSafe (resultTitle + "\n" + result), true);
+	ACAPI_WriteReport (FormatSafe (confirmTitle + "\n" + result), true);
 	return NoError;
 }
 
@@ -1059,11 +1049,422 @@ GSErrCode Do_CalcLineLengths (void)
 	return NoError;
 }
 
+GSErrCode Do_ScanUnusedLayers (void)
+{
+	// 1. Collect all layers
+	API_AttributeIndex layerCount = 0;
+	GSErrCode err = ACAPI_Attribute_GetNum (API_LayerID, &layerCount);
+	if (err != NoError || layerCount == 0) {
+		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+		return NoError;
+	}
+
+	struct LayerInfo {
+		API_AttributeIndex index;
+		GS::UniString name;
+		bool hidden;
+		bool locked;
+	};
+
+	GS::Array<LayerInfo> allLayers;
+
+	for (API_AttributeIndex i = 1; i <= layerCount; i++) {
+		API_Attribute attrib = {};
+		attrib.header.typeID = API_LayerID;
+		attrib.header.index = i;
+		GS::UniString uniName;
+		attrib.header.uniStringNamePtr = &uniName;
+
+		err = ACAPI_Attribute_Get (&attrib);
+		if (err == APIERR_DELETED)
+			continue;
+		if (err != NoError)
+			continue;
+
+		LayerInfo info;
+		info.index = i;
+		info.name = uniName;
+		info.hidden = (attrib.header.flags & APILay_Hidden) != 0;
+		info.locked = (attrib.header.flags & APILay_Locked) != 0;
+		allLayers.Push (info);
+	}
+
+	// 2. Collect used layer indices from all elements
+	GS::Array<bool> layerUsed;
+	for (UInt32 i = 0; i <= static_cast<UInt32>(layerCount); i++)
+		layerUsed.Push (false);
+
+	const API_ElemTypeID types[] = {
+		API_WallID, API_ColumnID, API_BeamID, API_WindowID, API_DoorID,
+		API_ObjectID, API_LampID, API_SlabID, API_RoofID, API_MeshID,
+		API_DimensionID, API_RadialDimensionID, API_LevelDimensionID,
+		API_AngleDimensionID, API_TextID, API_LabelID, API_ZoneID,
+		API_HatchID, API_LineID, API_PolyLineID, API_ArcID, API_CircleID,
+		API_SplineID, API_HotspotID, API_CutPlaneID, API_CameraID,
+		API_CamSetID, API_SectElemID, API_DrawingID, API_PictureID,
+		API_HotlinkID, API_CurtainWallID, API_ShellID, API_SkylightID,
+		API_MorphID, API_ChangeMarkerID, API_StairID, API_RailingID,
+		API_BeamSegmentID, API_ColumnSegmentID, API_OpeningID
+	};
+
+	GS::Int32 usedCount = 0;
+	for (const auto& typeID : types) {
+		GS::Array<API_Guid> elemList;
+		err = ACAPI_Element_GetElemList (API_ElemType (typeID), &elemList);
+		if (err != NoError)
+			continue;
+
+		for (const auto& guid : elemList) {
+			API_Element element = {};
+			element.header.guid = guid;
+			err = ACAPI_Element_Get (&element);
+			if (err == NoError) {
+				GS::UInt32 li = static_cast<GS::UInt32>(element.header.layer);
+				if (li > 0 && li < layerUsed.GetSize ()) {
+					layerUsed[li] = true;
+					usedCount++;
+				}
+			}
+		}
+	}
+
+	// 3. Find unused layers (skip index 1 = "ArchiCAD Layer")
+	GS::Array<LayerInfo> unusedLayers;
+
+	for (UInt32 i = 0; i < allLayers.GetSize (); i++) {
+		if (allLayers[i].index == 1)
+			continue;
+		GS::UInt32 li = static_cast<GS::UInt32>(allLayers[i].index);
+		if (li >= layerUsed.GetSize () || !layerUsed[li])
+			unusedLayers.Push (allLayers[i]);
+	}
+
+	// 4. Build report
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_LAYER_TITLE);
+	GS::UniString report;
+
+	report.Append (GetResString (STR_RES_REPORT, RS_LAYER_TOTAL));
+	AppendNumber (report, allLayers.GetSize ());
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_LAYER_UNUSED));
+	AppendNumber (report, unusedLayers.GetSize ());
+
+	if (unusedLayers.IsEmpty ()) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_LAYER_NONE));
+		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		return NoError;
+	}
+
+	report.Append ("\n\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_LAYER_LIST));
+	const UInt32 maxToList = 40;
+	UInt32 listed = 0;
+	for (const auto& layer : unusedLayers) {
+		if (listed >= maxToList) {
+			report.Append ("\n...");
+			break;
+		}
+		report.Append ("\n- ");
+		report.Append (layer.name);
+		if (layer.hidden)
+			report.Append (GetResString (STR_RES_REPORT, RS_LAYER_HIDDEN));
+		if (layer.locked)
+			report.Append (GetResString (STR_RES_REPORT, RS_LAYER_LOCKED));
+		listed++;
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+
+	// 5. Dialog: rename or just report?
+	GS::UniString dlgMsg = GetResString (STR_RES_REPORT, RS_LAYER_PROMPT_MSG);
+	GS::UniString dlgCount = GS::UniString::Printf ("\n\n(%d ", (int) unusedLayers.GetSize ());
+	dlgCount.Append (GetResString (STR_RES_REPORT, RS_LAYER_UNUSED));
+	dlgCount.TrimRight ();
+	dlgCount.Append (")");
+	dlgMsg.Append (dlgCount);
+
+	short button = DGAlert (DG_WARNING,
+							title,
+							dlgMsg,
+							GS::UniString (),
+							GetResString (STR_RES_REPORT, RS_LAYER_PROMPT_YES),
+							GetResString (STR_RES_REPORT, RS_LAYER_PROMPT_NO));
+	if (button != 1)
+		return NoError;
+
+	// 6. Rename with _null_ prefix
+	GS::Int32 renamedCount = 0;
+	GS::Int32 skippedCount = 0;
+	GS::Int32 failCount = 0;
+
+	for (UInt32 i = 0; i < unusedLayers.GetSize (); i++) {
+		if (unusedLayers[i].name.BeginsWith ("_null_")) {
+			skippedCount++;
+			continue;
+		}
+
+		API_Attribute attrib = {};
+		attrib.header.typeID = API_LayerID;
+		attrib.header.index = unusedLayers[i].index;
+
+		GS::UniString newName = "_null_" + unusedLayers[i].name;
+		attrib.header.uniStringNamePtr = &newName;
+
+		err = ACAPI_Attribute_Modify (&attrib, nullptr);
+		if (err == NoError)
+			renamedCount++;
+		else
+			failCount++;
+	}
+
+	GS::UniString result;
+	result.Append (GetResString (STR_RES_REPORT, RS_LAYERDEL_RENAMED));
+	AppendNumber (result, renamedCount);
+	if (skippedCount > 0) {
+		result.Append (GS::UniString::Printf ("\nУже с префиксом _null_: %d", (int) skippedCount));
+	}
+	if (failCount > 0) {
+		result.Append ("\n");
+		result.Append (GetResString (STR_RES_REPORT, RS_LAYERDEL_RENFAIL));
+		AppendNumber (result, failCount);
+	}
+
+	ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE) + "\n" + result), true);
+	return NoError;
+}
+
+GSErrCode Do_DeleteUnusedLayers (void)
+{
+	// Re-scan to get unused layer indices
+	API_AttributeIndex layerCount = 0;
+	GSErrCode err = ACAPI_Attribute_GetNum (API_LayerID, &layerCount);
+	if (err != NoError || layerCount == 0) {
+		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+		return NoError;
+	}
+
+	struct LayerEntry {
+		API_AttributeIndex index;
+		GS::UniString name;
+	};
+
+	GS::Array<LayerEntry> allLayers;
+
+	for (API_AttributeIndex i = 1; i <= layerCount; i++) {
+		API_Attribute attrib = {};
+		attrib.header.typeID = API_LayerID;
+		attrib.header.index = i;
+		GS::UniString uniName;
+		attrib.header.uniStringNamePtr = &uniName;
+
+		err = ACAPI_Attribute_Get (&attrib);
+		if (err == APIERR_DELETED)
+			continue;
+		if (err != NoError)
+			continue;
+
+		LayerEntry entry;
+		entry.index = i;
+		entry.name = uniName;
+		allLayers.Push (entry);
+	}
+
+	// Collect used layers
+	GS::Array<bool> layerUsed;
+	for (UInt32 i = 0; i <= static_cast<UInt32>(layerCount); i++)
+		layerUsed.Push (false);
+
+	const API_ElemTypeID types[] = {
+		API_WallID, API_ColumnID, API_BeamID, API_WindowID, API_DoorID,
+		API_ObjectID, API_LampID, API_SlabID, API_RoofID, API_MeshID,
+		API_DimensionID, API_RadialDimensionID, API_LevelDimensionID,
+		API_AngleDimensionID, API_TextID, API_LabelID, API_ZoneID,
+		API_HatchID, API_LineID, API_PolyLineID, API_ArcID, API_CircleID,
+		API_SplineID, API_HotspotID, API_CutPlaneID, API_CameraID,
+		API_CamSetID, API_SectElemID, API_DrawingID, API_PictureID,
+		API_HotlinkID, API_CurtainWallID, API_ShellID, API_SkylightID,
+		API_MorphID, API_ChangeMarkerID, API_StairID, API_RailingID,
+		API_BeamSegmentID, API_ColumnSegmentID, API_OpeningID
+	};
+
+	for (const auto& typeID : types) {
+		GS::Array<API_Guid> elemList;
+		ACAPI_Element_GetElemList (API_ElemType (typeID), &elemList);
+		for (const auto& guid : elemList) {
+			API_Element element = {};
+			element.header.guid = guid;
+			if (ACAPI_Element_Get (&element) == NoError) {
+				GS::UInt32 li = static_cast<GS::UInt32>(element.header.layer);
+				if (li > 0 && li < layerUsed.GetSize ())
+					layerUsed[li] = true;
+			}
+		}
+	}
+
+	// Find unused (skip index 1 = "ArchiCAD Layer")
+	GS::Array<LayerEntry> unusedLayers;
+	for (UInt32 i = 0; i < allLayers.GetSize (); i++) {
+		if (allLayers[i].index == 1)
+			continue;
+		GS::UInt32 li = static_cast<GS::UInt32>(allLayers[i].index);
+		if (li >= layerUsed.GetSize () || !layerUsed[li])
+			unusedLayers.Push (allLayers[i]);
+	}
+
+	if (unusedLayers.IsEmpty ()) {
+		ACAPI_WriteReport (FormatSafe (
+			GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE) + "\n" +
+			GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+		return NoError;
+	}
+
+	// Rename with _null_ prefix
+	GS::Int32 renamedCount = 0;
+	GS::Int32 skippedCount = 0;
+	GS::Int32 failCount = 0;
+
+	for (UInt32 i = 0; i < unusedLayers.GetSize (); i++) {
+		if (unusedLayers[i].name.BeginsWith ("_null_")) {
+			skippedCount++;
+			continue;
+		}
+
+		API_Attribute attrib = {};
+		attrib.header.typeID = API_LayerID;
+		attrib.header.index = unusedLayers[i].index;
+
+		GS::UniString newName = "_null_" + unusedLayers[i].name;
+		attrib.header.uniStringNamePtr = &newName;
+
+		err = ACAPI_Attribute_Modify (&attrib, nullptr);
+		if (err == NoError)
+			renamedCount++;
+		else
+			failCount++;
+	}
+
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE);
+	GS::UniString result;
+	result.Append (GetResString (STR_RES_REPORT, RS_LAYERDEL_RENAMED));
+	AppendNumber (result, renamedCount);
+	if (skippedCount > 0) {
+		result.Append (GS::UniString::Printf ("\nУже с префиксом _null_: %d", (int) skippedCount));
+	}
+	if (failCount > 0) {
+		result.Append ("\n");
+		result.Append (GetResString (STR_RES_REPORT, RS_LAYERDEL_RENFAIL));
+		AppendNumber (result, failCount);
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + result), true);
+	return NoError;
+}
+
+GSErrCode Do_ProjectStats (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_STAT_TITLE);
+	GS::UniString report;
+	UInt32 totalElements = 0;
+
+	struct ElemInfo {
+		API_ElemTypeID typeID;
+		const char* name;
+	};
+
+	const ElemInfo types[] = {
+		{ API_WallID,              "Стены" },
+		{ API_ColumnID,            "Колонны" },
+		{ API_BeamID,              "Балки" },
+		{ API_WindowID,            "Окна" },
+		{ API_DoorID,              "Двери" },
+		{ API_ObjectID,            "Объекты" },
+		{ API_LampID,              "Освещение" },
+		{ API_SlabID,              "Перекрытия" },
+		{ API_RoofID,              "Крыши" },
+		{ API_MeshID,              "Массивы" },
+		{ API_DimensionID,         "Размеры" },
+		{ API_RadialDimensionID,   "Радиальные размеры" },
+		{ API_LevelDimensionID,    "Размеры уровней" },
+		{ API_AngleDimensionID,    "Угловые размеры" },
+		{ API_TextID,              "Текст" },
+		{ API_LabelID,             "Марки" },
+		{ API_ZoneID,              "Зоны" },
+		{ API_HatchID,             "Штриховки" },
+		{ API_LineID,              "Линии" },
+		{ API_PolyLineID,          "Полилинии" },
+		{ API_ArcID,               "Дуги" },
+		{ API_CircleID,            "Окружности" },
+		{ API_SplineID,            "Сплайны" },
+		{ API_HotspotID,           "Хотспоты" },
+		{ API_CutPlaneID,          "Секции" },
+		{ API_CameraID,            "Камеры" },
+		{ API_DrawingID,           "Чертежи" },
+		{ API_PictureID,           "Изображения" },
+		{ API_HotlinkID,           "Хотлинки" },
+		{ API_CurtainWallID,       "Фасадные стены" },
+		{ API_ShellID,             "Оболочки" },
+		{ API_SkylightID,          "Зенитные фонари" },
+		{ API_MorphID,             "Морфы" },
+		{ API_StairID,             "Лестницы" },
+		{ API_RailingID,           "Ограждения" },
+		{ API_BeamSegmentID,       "Сегменты балок" },
+		{ API_ColumnSegmentID,     "Сегменты колонн" },
+		{ API_OpeningID,           "Проёмы" }
+	};
+
+	GS::UniString typeReport;
+	bool hasElements = false;
+
+	for (const auto& info : types) {
+		GS::Array<API_Guid> elemList;
+		GSErrCode err = ACAPI_Element_GetElemList (API_ElemType (info.typeID), &elemList);
+		if (err == NoError && !elemList.IsEmpty ()) {
+			UInt32 count = (UInt32) elemList.GetSize ();
+			totalElements += count;
+			typeReport.Append ("\n  ");
+			typeReport.Append (GS::UniString (info.name));
+
+			// Align: pad to 22 chars
+			Int32 padding = 22 - GS::UniString (info.name).GetLength ();
+			for (Int32 p = 0; p < padding; p++)
+				typeReport.Append (" ");
+
+			typeReport.Append (GS::UniString::Printf (": %u", count));
+			hasElements = true;
+		}
+	}
+
+	report.Append (GetResString (STR_RES_REPORT, RS_STAT_TOTAL));
+	AppendNumber (report, totalElements);
+
+	if (hasElements) {
+		report.Append ("\n\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_STAT_BY_TYPE));
+		report.Append (typeReport);
+	}
+
+	// Layer count
+	API_AttributeIndex layerCount = 0;
+	if (ACAPI_Attribute_GetNum (API_LayerID, &layerCount) == NoError) {
+		report.Append ("\n\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_STAT_LAYERS));
+		AppendNumber (report, layerCount);
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
+
 GSErrCode Do_About (void)
 {
 	GS::UniString title = GetResString (STR_RES_ADDON_INFO, 1);
 	GS::UniString body = GetResString (STR_RES_REPORT, RS_ABOUT_BODY);
-	ACAPI_WriteReport (FormatSafe (title + "\n" + body), true);
+	DGAlert (DG_INFORMATION,
+			 title,
+			 body,
+			 GS::UniString (),
+			 "OK");
 	return NoError;
 }
 
@@ -1084,14 +1485,14 @@ GSErrCode Do_TogglePalette (void)
 GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 {
 	switch (menuParams->menuItemRef.itemIndex) {
-		case 1:		return Do_ScanUnusedViews ();
-		case 2:		return Do_DeleteUnusedViews ();
-		case 3:		return Do_ScanEmbeddedLibrary ();
-		case 4:		return Do_DeleteUnusedEmbeddedLibParts ();
+		case 1:		return Do_ScanDeleteUnusedViews ();
+		case 2:		return Do_ScanDeleteEmbeddedLibrary ();
+		case 3:		return Do_ScanUnusedLayers ();
+		case 4:		return Do_ProjectStats ();
 		case 5:		return Do_CalcHatchAreas ();
 		case 6:		return Do_CalcLineLengths ();
 		case 7:		return Do_TogglePalette ();
-		case 9:		return Do_About ();
+		case 8:		return Do_About ();
 		default:	break;
 	}
 	return NoError;

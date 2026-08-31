@@ -1,10 +1,10 @@
 #include "ProjectCleanerPalette.hpp"
 
 // Forward declarations from ProjectCleaner.cpp
-extern GSErrCode Do_ScanUnusedViews (void);
-extern GSErrCode Do_DeleteUnusedViews (void);
-extern GSErrCode Do_ScanEmbeddedLibrary (void);
-extern GSErrCode Do_DeleteUnusedEmbeddedLibParts (void);
+extern GSErrCode Do_ScanDeleteUnusedViews (void);
+extern GSErrCode Do_ScanDeleteEmbeddedLibrary (void);
+extern GSErrCode Do_ScanUnusedLayers (void);
+extern GSErrCode Do_ProjectStats (void);
 extern GSErrCode Do_CalcHatchAreas (void);
 extern GSErrCode Do_CalcLineLengths (void);
 extern GSErrCode Do_About (void);
@@ -66,12 +66,12 @@ ProjectCleanerPalette& ProjectCleanerPalette::GetInstance ()
 }
 
 ProjectCleanerPalette::ProjectCleanerPalette ():
-	DG::Palette	(ACAPI_GetOwnResModule (), PAL_RES_ID, ACAPI_GetOwnResModule (), PaletteGuid ()),
+	DG::Palette	(ACAPI_GetOwnResModule (), PAL_RES_ID, ACAPI_GetOwnResModule ()),
 
-	btnScanViews		(GetReference (), BtnScanViews),
-	btnDeleteViews		(GetReference (), BtnDeleteViews),
-	btnScanLibrary		(GetReference (), BtnScanLibrary),
-	btnDeleteLibrary	(GetReference (), BtnDeleteLibrary),
+	btnScanDeleteViews	(GetReference (), BtnScanDeleteViews),
+	btnScanDeleteLibrary	(GetReference (), BtnScanDeleteLibrary),
+	btnScanLayers		(GetReference (), BtnScanLayers),
+	btnProjectStats		(GetReference (), BtnProjectStats),
 	btnHatchArea		(GetReference (), BtnHatchArea),
 	btnLineLength		(GetReference (), BtnLineLength),
 	btnAbout			(GetReference (), BtnAbout)
@@ -99,14 +99,14 @@ void ProjectCleanerPalette::PanelCloseRequested (const DG::PanelCloseRequestEven
 
 void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 {
-	if (ev.GetSource () == &btnScanViews)
-		Do_ScanUnusedViews ();
-	else if (ev.GetSource () == &btnDeleteViews)
-		Do_DeleteUnusedViews ();
-	else if (ev.GetSource () == &btnScanLibrary)
-		Do_ScanEmbeddedLibrary ();
-	else if (ev.GetSource () == &btnDeleteLibrary)
-		Do_DeleteUnusedEmbeddedLibParts ();
+	if (ev.GetSource () == &btnScanDeleteViews)
+		Do_ScanDeleteUnusedViews ();
+	else if (ev.GetSource () == &btnScanDeleteLibrary)
+		Do_ScanDeleteEmbeddedLibrary ();
+	else if (ev.GetSource () == &btnScanLayers)
+		Do_ScanUnusedLayers ();
+	else if (ev.GetSource () == &btnProjectStats)
+		Do_ProjectStats ();
 	else if (ev.GetSource () == &btnHatchArea)
 		Do_CalcHatchAreas ();
 	else if (ev.GetSource () == &btnLineLength)

@@ -11,19 +11,19 @@ class ProjectCleanerPalette :	public DG::Palette,
 {
 private:
 	enum {
-		BtnScanViews		= 1,
-		BtnDeleteViews		= 2,
-		BtnScanLibrary		= 3,
-		BtnDeleteLibrary	= 4,
+		BtnScanDeleteViews	= 1,
+		BtnScanDeleteLibrary	= 2,
+		BtnScanLayers		= 3,
+		BtnProjectStats		= 4,
 		BtnHatchArea		= 5,
 		BtnLineLength		= 6,
 		BtnAbout			= 7
 	};
 
-	DG::Button		btnScanViews;
-	DG::Button		btnDeleteViews;
-	DG::Button		btnScanLibrary;
-	DG::Button		btnDeleteLibrary;
+	DG::Button		btnScanDeleteViews;
+	DG::Button		btnScanDeleteLibrary;
+	DG::Button		btnScanLayers;
+	DG::Button		btnProjectStats;
 	DG::Button		btnHatchArea;
 	DG::Button		btnLineLength;
 	DG::Button		btnAbout;

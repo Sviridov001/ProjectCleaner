@@ -14,7 +14,7 @@ private:
 		BtnScanDeleteViews	= 1,
 		BtnScanDeleteLibrary	= 2,
 		BtnScanLayers		= 3,
-		BtnProjectStats		= 4,
+		BtnMasterLayouts	= 4,
 		BtnHatchArea		= 5,
 		BtnLineLength		= 6,
 		BtnCreateZones		= 7,
@@ -24,7 +24,7 @@ private:
 	DG::Button		btnScanDeleteViews;
 	DG::Button		btnScanDeleteLibrary;
 	DG::Button		btnScanLayers;
-	DG::Button		btnProjectStats;
+	DG::Button		btnMasterLayouts;
 	DG::Button		btnHatchArea;
 	DG::Button		btnLineLength;
 	DG::Button		btnCreateZones;

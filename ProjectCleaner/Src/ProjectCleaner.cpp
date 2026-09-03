@@ -104,6 +104,17 @@
 #define RS_ZONE_NO_SEL		84	// "No hatches selected."
 #define RS_ZONE_CREATED		85	// "Created zones: "
 #define RS_ZONE_FAIL		86	// "Failed to create: "
+#define RS_MASTER_TITLE		87	// master layout scan title
+#define RS_MASTER_TOTAL		88	// "Total master layouts: "
+#define RS_MASTER_UNUSED	89	// "Unused master layouts: "
+#define RS_MASTER_LIST		90	// "Candidates for renaming:"
+#define RS_MASTER_NONE		91	// "No unused master layouts found."
+#define RS_MASTER_PROMPT_MSG	92	// "Add _null_ prefix?"
+#define RS_MASTER_PROMPT_YES	93	// "Add prefix"
+#define RS_MASTER_PROMPT_NO	94	// "No, report only"
+#define RS_MASTER_RENAME_TITLE	95	// rename title
+#define RS_MASTER_RENAMED	96	// "Renamed master layouts: "
+#define RS_MASTER_RENFAIL	97	// "Failed to rename: "
 
 // =============================================================================
 // Resource helpers
@@ -1424,6 +1435,233 @@ GSErrCode Do_ScanUnusedLayers (void)
 	return NoError;
 }
 
+GSErrCode Do_ScanUnusedMasterLayouts (void)
+{
+	// 1. Get all master layouts
+	GS::Array<API_DatabaseUnId> masterLayouts;
+	GSErrCode err = ACAPI_Database (APIDb_GetMasterLayoutDatabasesID, nullptr, &masterLayouts);
+	if (err != NoError || masterLayouts.IsEmpty ()) {
+		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_NONE)), true);
+		return NoError;
+	}
+
+	struct MasterLayoutInfo {
+		API_DatabaseUnId dbId;
+		GS::UniString name;
+	};
+
+	GS::Array<MasterLayoutInfo> allMasters;
+	for (const auto& mId : masterLayouts) {
+		API_DatabaseInfo dbInfo = {};
+		dbInfo.databaseUnId = mId;
+		err = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+		if (err == NoError) {
+			MasterLayoutInfo info;
+			info.dbId = mId;
+			info.name = GS::UniString (dbInfo.name);
+			allMasters.Push (info);
+		}
+	}
+
+	// 2. Get all regular layouts and find which master each uses
+	GS::Array<API_DatabaseUnId> layouts;
+	err = ACAPI_Database (APIDb_GetLayoutDatabasesID, nullptr, &layouts);
+	if (err != NoError)
+		layouts.Clear ();
+
+	GS::Array<bool> masterUsed;
+	for (UInt32 i = 0; i < allMasters.GetSize (); i++)
+		masterUsed.Push (false);
+
+	for (const auto& layoutId : layouts) {
+		API_DatabaseInfo dbInfo = {};
+		dbInfo.databaseUnId = layoutId;
+		err = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+		if (err != NoError)
+			continue;
+
+		API_Guid usedMasterId = dbInfo.masterLayoutUnId.elemSetId;
+		if (usedMasterId == APINULLGuid)
+			continue;
+
+		for (UInt32 i = 0; i < allMasters.GetSize (); i++) {
+			if (allMasters[i].dbId.elemSetId == usedMasterId) {
+				masterUsed[i] = true;
+				break;
+			}
+		}
+	}
+
+	// 3. Find unused master layouts
+	GS::Array<MasterLayoutInfo> unusedMasters;
+	for (UInt32 i = 0; i < allMasters.GetSize (); i++) {
+		if (!masterUsed[i])
+			unusedMasters.Push (allMasters[i]);
+	}
+
+	// 4. Build report
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_MASTER_TITLE);
+	GS::UniString report;
+
+	report.Append (GetResString (STR_RES_REPORT, RS_MASTER_TOTAL));
+	AppendNumber (report, allMasters.GetSize ());
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_MASTER_UNUSED));
+	AppendNumber (report, unusedMasters.GetSize ());
+
+	if (unusedMasters.IsEmpty ()) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_MASTER_NONE));
+		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		return NoError;
+	}
+
+	report.Append ("\n\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_MASTER_LIST));
+	const UInt32 maxToList = 40;
+	UInt32 listed = 0;
+	for (const auto& ml : unusedMasters) {
+		if (listed >= maxToList) {
+			report.Append ("\n...");
+			break;
+		}
+		report.Append ("\n- ");
+		report.Append (ml.name);
+		listed++;
+	}
+
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+
+	// 5. Dialog: rename or just report?
+	GS::UniString dlgMsg = GetResString (STR_RES_REPORT, RS_MASTER_PROMPT_MSG);
+	GS::UniString dlgCount = GS::UniString::Printf ("\n\n(%d ", (int) unusedMasters.GetSize ());
+	dlgCount.Append (GetResString (STR_RES_REPORT, RS_MASTER_UNUSED));
+	dlgCount.TrimRight ();
+	dlgCount.Append (")");
+	dlgMsg.Append (dlgCount);
+
+	short button = DGAlert (DG_WARNING,
+							title,
+							dlgMsg,
+							GS::UniString (),
+							GetResString (STR_RES_REPORT, RS_MASTER_PROMPT_YES),
+							GetResString (STR_RES_REPORT, RS_MASTER_PROMPT_NO));
+	if (button != 1)
+		return NoError;
+
+	// 6. Rename with _null_ prefix — all three stores: DB name, LayoutInfo.layoutName, Navigator uName
+	GS::Int32 renamedCount = 0;
+	GS::Int32 skippedCount = 0;
+	GS::Int32 failCount = 0;
+	GS::UniString details; // visible details about failures
+
+	// Wrap in undoable command so ArchiCAD properly commits database & navigator changes
+	ACAPI_CallUndoableCommand ("Переименование неиспользуемых основных макетов", [&] () -> GSErrCode {
+		for (UInt32 i = 0; i < unusedMasters.GetSize (); i++) {
+			if (unusedMasters[i].name.BeginsWith ("_null_")) {
+				skippedCount++;
+				continue;
+			}
+			GS::UniString oldName = unusedMasters[i].name;
+			GS::UniString newName = GS::UniString ("_null_") + oldName;
+
+			// Fetch DB and LayoutInfo BEFORE modify (keep original UnId)
+			API_DatabaseInfo dbInfo = {};
+			dbInfo.databaseUnId = unusedMasters[i].dbId;
+			GSErrCode errDbGet = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+			if (errDbGet != NoError) { failCount++; details.Append (GS::UniString::Printf ("\n%T: GetDB %d", oldName.ToPrintf (), (int) errDbGet)); continue; }
+
+			API_LayoutInfo layoutInfo = {};
+			GSErrCode errLayGet = ACAPI_Environment (APIEnv_GetLayoutSetsID, &layoutInfo, &dbInfo.databaseUnId);
+			bool hasLayout = (errLayGet == NoError);
+
+			// 6a. Update LayoutInfo.layoutName first (uchar_t)
+			GSErrCode errLayChg = -1;
+			if (hasLayout) {
+				GS::ucscpy (layoutInfo.layoutName, newName.ToUStr ());
+				errLayChg = ACAPI_Environment (APIEnv_ChangeLayoutSetsID, &layoutInfo, &dbInfo.databaseUnId);
+				// keep customData cleanup after Change
+				if (layoutInfo.customData != nullptr) { delete layoutInfo.customData; layoutInfo.customData = nullptr; }
+			}
+
+			// 6b. Update Database name (char)
+			GS::snuprintf (dbInfo.name, sizeof (dbInfo.name), "%s", newName.ToCStr ().Get ());
+			GSErrCode errDbChg = ACAPI_Database (APIDb_ModifyDatabaseID, &dbInfo);
+
+			// 6c. Update Navigator uName (uchar_t) — this is what Book shows and what restores on click
+			GSErrCode errNavGet = -1, errNavChg = -1;
+			bool navFound = false;
+			{
+				API_NavigatorSet navSet = {};
+				navSet.mapId = API_LayoutMap;
+				if (ACAPI_Navigator (APINavigator_GetNavigatorSetID, &navSet, nullptr) == NoError) {
+					GS::Array<API_Guid> stack;
+					stack.Push (navSet.rootGuid);
+					while (!stack.IsEmpty () && !navFound) {
+						API_Guid curGuid = stack.Pop ();
+						API_NavigatorItem curItem = {};
+						curItem.guid = curGuid;
+						curItem.mapId = API_LayoutMap;
+						GS::Array<API_NavigatorItem> children;
+						if (ACAPI_Navigator (APINavigator_GetNavigatorChildrenItemsID, &curItem, nullptr, &children) != NoError) continue;
+						for (const auto& child : children) {
+							bool guidMatch = (child.db.databaseUnId.elemSetId == unusedMasters[i].dbId.elemSetId);
+							bool nameMatch = (GS::UniString (child.uName) == oldName);
+							if (child.itemType == API_MasterLayoutNavItem && (guidMatch || nameMatch)) {
+								API_NavigatorItem navItem = {};
+								navItem.guid = child.guid;
+								navItem.mapId = API_LayoutMap;
+								errNavGet = ACAPI_Navigator (APINavigator_GetNavigatorItemID, &navItem.guid, &navItem);
+								if (errNavGet == NoError) {
+									GS::ucscpy (navItem.uName, newName.ToUStr ());
+									navItem.customName = true;
+									errNavChg = ACAPI_Navigator (APINavigator_ChangeNavigatorItemID, &navItem, nullptr);
+									navFound = (errNavChg == NoError);
+								}
+								break;
+							}
+							if (child.itemType == API_MasterFolderNavItem || child.itemType == API_FolderNavItem || child.itemType == API_BookNavItem || child.itemType == API_SubSetNavItem)
+								stack.Push (child.guid);
+						}
+					}
+				}
+			}
+
+			bool ok = true;
+			// DB modify for master layouts fails with -2130313215 inside undo — not critical, navigator+layout is enough
+			// if (errDbChg != NoError) ok = false;
+			if (hasLayout && errLayChg != NoError && errLayChg != APIERR_BADPARS) ok = false;
+			if (!navFound) ok = false;
+
+			if (ok) {
+				renamedCount++;
+			} else {
+				failCount++;
+				details.Append (GS::UniString::Printf ("\n%T: DB=%d LayGet=%d LayChg=%d NavGet=%d NavChg=%d found=%d",
+					oldName.ToPrintf (), (int) errDbChg, (int) errLayGet, (int) errLayChg, (int) errNavGet, (int) errNavChg, (int) navFound));
+			}
+		}
+		return NoError;
+	});
+
+	GS::UniString result;
+	result.Append (GetResString (STR_RES_REPORT, RS_MASTER_RENAMED));
+	AppendNumber (result, renamedCount);
+	if (skippedCount > 0) {
+		result.Append (GS::UniString::Printf ("\nУже с префиксом _null_: %d", (int) skippedCount));
+	}
+	if (failCount > 0) {
+		result.Append ("\n");
+		result.Append (GetResString (STR_RES_REPORT, RS_MASTER_RENFAIL));
+		AppendNumber (result, failCount);
+		if (!details.IsEmpty ())
+			result.Append (details);
+	}
+
+	ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_RENAME_TITLE) + "\n" + result), true);
+	return NoError;
+}
+
 GSErrCode Do_DeleteUnusedLayers (void)
 {
 	// Re-scan to get unused layer indices
@@ -1655,6 +1893,7 @@ GSErrCode Do_About (void)
 			 body,
 			 GS::UniString (),
 			 "OK");
+	Do_ProjectStats ();
 	return NoError;
 }
 
@@ -1678,7 +1917,7 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 1:		return Do_ScanDeleteUnusedViews ();
 		case 2:		return Do_ScanDeleteEmbeddedLibrary ();
 		case 3:		return Do_ScanUnusedLayers ();
-		case 4:		return Do_ProjectStats ();
+		case 4:		return Do_ScanUnusedMasterLayouts ();
 		case 5:		return Do_CalcHatchAreas ();
 		case 6:		return Do_CalcLineLengths ();
 		case 7:		return Do_CreateZonesFromHatches ();

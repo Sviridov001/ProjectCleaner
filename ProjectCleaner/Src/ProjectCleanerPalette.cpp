@@ -4,7 +4,7 @@
 extern GSErrCode Do_ScanDeleteUnusedViews (void);
 extern GSErrCode Do_ScanDeleteEmbeddedLibrary (void);
 extern GSErrCode Do_ScanUnusedLayers (void);
-extern GSErrCode Do_ProjectStats (void);
+extern GSErrCode Do_ScanUnusedMasterLayouts (void);
 extern GSErrCode Do_CalcHatchAreas (void);
 extern GSErrCode Do_CalcLineLengths (void);
 extern GSErrCode Do_CreateZonesFromHatches (void);
@@ -72,7 +72,7 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnScanDeleteViews	(GetReference (), BtnScanDeleteViews),
 	btnScanDeleteLibrary	(GetReference (), BtnScanDeleteLibrary),
 	btnScanLayers		(GetReference (), BtnScanLayers),
-	btnProjectStats		(GetReference (), BtnProjectStats),
+	btnMasterLayouts	(GetReference (), BtnMasterLayouts),
 	btnHatchArea		(GetReference (), BtnHatchArea),
 	btnLineLength		(GetReference (), BtnLineLength),
 	btnCreateZones		(GetReference (), BtnCreateZones),
@@ -116,7 +116,7 @@ void ProjectCleanerPalette::UpdateButtonStates ()
 	btnScanDeleteViews.SetStatus (enabled);
 	btnScanDeleteLibrary.SetStatus (enabled);
 	btnScanLayers.SetStatus (enabled);
-	btnProjectStats.SetStatus (enabled);
+	btnMasterLayouts.SetStatus (enabled);
 	btnHatchArea.SetStatus (enabled);
 	btnLineLength.SetStatus (enabled);
 	btnCreateZones.SetStatus (enabled);
@@ -134,8 +134,8 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_ScanDeleteEmbeddedLibrary ();
 	else if (ev.GetSource () == &btnScanLayers)
 		Do_ScanUnusedLayers ();
-	else if (ev.GetSource () == &btnProjectStats)
-		Do_ProjectStats ();
+	else if (ev.GetSource () == &btnMasterLayouts)
+		Do_ScanUnusedMasterLayouts ();
 	else if (ev.GetSource () == &btnHatchArea)
 		Do_CalcHatchAreas ();
 	else if (ev.GetSource () == &btnLineLength)

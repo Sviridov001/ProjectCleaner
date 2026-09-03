@@ -100,6 +100,10 @@
 #define RS_LAYER_PROMPT_MSG	80	// "Add _null_ prefix?"
 #define RS_LAYER_PROMPT_YES	81	// "Add prefix"
 #define RS_LAYER_PROMPT_NO	82	// "No, report only"
+#define RS_ZONE_TITLE		83	// zone creation report title
+#define RS_ZONE_NO_SEL		84	// "No hatches selected."
+#define RS_ZONE_CREATED		85	// "Created zones: "
+#define RS_ZONE_FAIL		86	// "Failed to create: "
 
 // =============================================================================
 // Resource helpers
@@ -895,6 +899,192 @@ GSErrCode Do_CalcHatchAreas (void)
 	return NoError;
 }
 
+// =============================================================================
+// Zone creation from hatches
+// =============================================================================
+
+static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPends,
+											API_PolyArc** srcParcs, const API_Polygon& hatchPoly,
+											short floorInd, const GS::UniString& roomName,
+											const GS::UniString& roomNoStr)
+{
+	// Step 1: Get defaults FIRST
+	API_Element		element = {};
+	API_ElementMemo	memo = {};
+
+	element.header.type = API_ZoneID;
+	GSErrCode err = ACAPI_Element_GetDefaults (&element, &memo);
+	if (err != NoError)
+		return err;
+
+	// Step 2: Determine if outer contour is closed
+	Int32 outerEnd = (*srcPends)[1];
+	bool closed = (outerEnd > 0 &&
+				   fabs ((*srcCoords)[outerEnd].x - (*srcCoords)[1].x) < 1e-10 &&
+				   fabs ((*srcCoords)[outerEnd].y - (*srcCoords)[1].y) < 1e-10);
+
+	// Step 3: Compute total coords with closing vertex if needed
+	Int32 extraClosedVertex = closed ? 0 : 1;
+	Int32 totalCoords = hatchPoly.nCoords + extraClosedVertex;
+
+	// Step 4: Set zone properties (AFTER GetDefaults, BEFORE memo alloc)
+	element.header.type     = API_ZoneID;
+	element.header.floorInd = floorInd;
+	element.zone.manual     = true;
+	element.zone.catInd     = element.zone.catInd;  // keep from defaults
+	element.zone.poly.nCoords   = totalCoords;
+	element.zone.poly.nSubPolys = hatchPoly.nSubPolys;
+	element.zone.poly.nArcs     = hatchPoly.nArcs;
+
+	GS::snuprintf (element.zone.roomName,  sizeof (element.zone.roomName),  roomName.ToUStr ());
+	GS::snuprintf (element.zone.roomNoStr, sizeof (element.zone.roomNoStr), roomNoStr.ToUStr ());
+
+	// Stamp position: centroid of outer contour
+	double cx = 0.0, cy = 0.0;
+	for (Int32 i = 1; i <= outerEnd; i++) {
+		cx += (*srcCoords)[i].x;
+		cy += (*srcCoords)[i].y;
+	}
+	cx /= (double) outerEnd;
+	cy /= (double) outerEnd;
+	element.zone.pos.x = cx;
+	element.zone.pos.y = cy;
+	element.zone.roomHeight = 2.8;
+
+	// Step 5: Allocate memo handles (AFTER GetDefaults, AFTER setting poly counts)
+	memo.coords = reinterpret_cast<API_Coord**> (BMAllocateHandle ((totalCoords + 1) * sizeof (API_Coord), ALLOCATE_CLEAR, 0));
+	memo.pends  = reinterpret_cast<Int32**> (BMAllocateHandle ((hatchPoly.nSubPolys + 1) * sizeof (Int32), ALLOCATE_CLEAR, 0));
+	if (hatchPoly.nArcs > 0)
+		memo.parcs = reinterpret_cast<API_PolyArc**> (BMAllocateHandle (hatchPoly.nArcs * sizeof (API_PolyArc), ALLOCATE_CLEAR, 0));
+
+	if (!memo.coords || !memo.pends) {
+		ACAPI_DisposeElemMemoHdls (&memo);
+		return APIERR_MEMFULL;
+	}
+
+	// Step 6: Fill coords - copy all hatch coords
+	Int32 dstIdx = 1;
+	for (Int32 i = 1; i <= hatchPoly.nCoords; i++) {
+		(*memo.coords)[dstIdx].x = (*srcCoords)[i].x;
+		(*memo.coords)[dstIdx].y = (*srcCoords)[i].y;
+		dstIdx++;
+	}
+
+	// Add closing vertex if needed
+	if (!closed) {
+		(*memo.coords)[dstIdx].x = (*srcCoords)[1].x;
+		(*memo.coords)[dstIdx].y = (*srcCoords)[1].y;
+		dstIdx++;
+	}
+
+	// Fill pends
+	for (Int32 sp = 1; sp <= hatchPoly.nSubPolys; sp++)
+		(*memo.pends)[sp] = (*srcPends)[sp];
+	// Adjust last sub-polygon's pend if we added a closing vertex to outer
+	if (!closed)
+		(*memo.pends)[1] = totalCoords;
+
+	// Fill arcs
+	if (hatchPoly.nArcs > 0 && memo.parcs != nullptr) {
+		for (Int32 i = 0; i < hatchPoly.nArcs; i++) {
+			(*memo.parcs)[i].begIndex = (*srcParcs)[i].begIndex;
+			(*memo.parcs)[i].endIndex = (*srcParcs)[i].endIndex;
+			(*memo.parcs)[i].arcAngle = (*srcParcs)[i].arcAngle;
+		}
+	}
+
+	// Step 7: Create
+	err = ACAPI_Element_Create (&element, &memo);
+	if (err != NoError) {
+		ACAPI_WriteReport (GS::UniString::Printf ("Create err=%d", (int) err), true);
+	}
+
+	ACAPI_DisposeElemMemoHdls (&memo);
+	return err;
+}
+
+	GSErrCode Do_CreateZonesFromHatches (void)
+	{
+		GS::UniString title = GetResString (STR_RES_REPORT, RS_ZONE_TITLE);
+
+		// 1. Get selection
+		API_SelectionInfo selInfo;
+		BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+		GS::Array<API_Neig> selNeigs;
+		GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+		if (err != NoError || selNeigs.IsEmpty ()) {
+			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
+			return NoError;
+		}
+
+		// 2. Create zones inside undo scope
+		UInt32 createdCount = 0;
+		UInt32 failCount = 0;
+
+		err = ACAPI_CallUndoableCommand ("Создание зон из штриховок",
+			[&] () -> GSErrCode {
+				UInt32 zoneNumber = 0;
+
+				for (const API_Neig& neig : selNeigs) {
+					if (neig.neigID != APINeig_Hatch)
+						continue;
+
+					API_Element elem;
+					BNZeroMemory (&elem, sizeof (API_Element));
+					elem.header.guid = neig.guid;
+					if (ACAPI_Element_Get (&elem) != NoError)
+						continue;
+					if (elem.header.type != API_HatchID)
+						continue;
+
+					API_ElementMemo memo;
+					BNZeroMemory (&memo, sizeof (API_ElementMemo));
+					err = ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_All);
+					if (err != NoError)
+						continue;
+
+					if (memo.coords == nullptr || memo.pends == nullptr ||
+						elem.hatch.poly.nCoords < 3) {
+						ACAPI_DisposeElemMemoHdls (&memo);
+						continue;
+					}
+
+					zoneNumber++;
+					GS::UniString roomName = GS::UniString::Printf ("Помещение %u", (unsigned int) zoneNumber);
+					GS::UniString roomNoStr = GS::UniString::Printf ("%u", (unsigned int) zoneNumber);
+
+					err = CreateZoneFromHatchPoly (memo.coords, memo.pends, memo.parcs, elem.hatch.poly,
+												   elem.header.floorInd, roomName, roomNoStr);
+					if (err == NoError)
+						createdCount++;
+					else
+						failCount++;
+
+					ACAPI_DisposeElemMemoHdls (&memo);
+				}
+
+				return NoError;
+			});
+
+		// 3. Report
+		if (createdCount == 0 && failCount == 0) {
+			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
+			return NoError;
+		}
+
+		GS::UniString report;
+		report.Append (GetResString (STR_RES_REPORT, RS_ZONE_CREATED));
+		AppendNumber (report, createdCount);
+		if (failCount > 0) {
+			report.Append ("\n");
+			report.Append (GetResString (STR_RES_REPORT, RS_ZONE_FAIL));
+			AppendNumber (report, failCount);
+		}
+
+		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		return NoError;
+	}
+
 GSErrCode Do_CalcLineLengths (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_LINE_TITLE);
@@ -1491,8 +1681,9 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 4:		return Do_ProjectStats ();
 		case 5:		return Do_CalcHatchAreas ();
 		case 6:		return Do_CalcLineLengths ();
-		case 7:		return Do_TogglePalette ();
-		case 8:		return Do_About ();
+		case 7:		return Do_CreateZonesFromHatches ();
+		case 8:		return Do_TogglePalette ();
+		case 9:		return Do_About ();
 		default:	break;
 	}
 	return NoError;
@@ -1514,6 +1705,14 @@ GSErrCode __ACENV_CALL	RegisterInterface (void)
 	return ACAPI_Register_Menu (MENU_RES_ID, 32502, MenuCode_UserDef, MenuFlag_SeparatorBefore);
 }
 
+GSErrCode __ACENV_CALL	ProjectEventHandler (API_NotifyEventID notifID, Int32 /*param*/)
+{
+	if (notifID == APINotify_ChangeWindow)
+		ProjectCleanerPalette::GetInstance ().UpdateButtonStates ();
+
+	return NoError;
+}
+
 GSErrCode __ACENV_CALL	Initialize (void)
 {
 	GSErrCode err = ACAPI_Install_MenuHandler (MENU_RES_ID, MenuHandler);
@@ -1525,11 +1724,14 @@ GSErrCode __ACENV_CALL	Initialize (void)
 								  API_PalEnabled_Detail + API_PalEnabled_Worksheet + API_PalEnabled_Layout +
 								  API_PalEnabled_DocumentFrom3D, GSGuid2APIGuid (ProjectCleanerPalette::PaletteGuid ()));
 
+	ACAPI_Notify_CatchProjectEvent (APINotify_ChangeWindow, ProjectEventHandler);
+
 	return err;
 }
 
 GSErrCode __ACENV_CALL	FreeData (void)
 {
+	ACAPI_Notify_CatchProjectEvent (APINotify_ChangeWindow, nullptr);
 	ACAPI_UnregisterModelessWindow (ProjectCleanerPalette::PaletteRefId ());
 	return NoError;
 }

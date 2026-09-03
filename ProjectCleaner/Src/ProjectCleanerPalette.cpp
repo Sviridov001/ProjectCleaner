@@ -7,6 +7,7 @@ extern GSErrCode Do_ScanUnusedLayers (void);
 extern GSErrCode Do_ProjectStats (void);
 extern GSErrCode Do_CalcHatchAreas (void);
 extern GSErrCode Do_CalcLineLengths (void);
+extern GSErrCode Do_CreateZonesFromHatches (void);
 extern GSErrCode Do_About (void);
 
 #define PAL_RES_ID 32600
@@ -74,6 +75,7 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnProjectStats		(GetReference (), BtnProjectStats),
 	btnHatchArea		(GetReference (), BtnHatchArea),
 	btnLineLength		(GetReference (), BtnLineLength),
+	btnCreateZones		(GetReference (), BtnCreateZones),
 	btnAbout			(GetReference (), BtnAbout)
 {
 	this->Attach (*this);
@@ -90,6 +92,7 @@ ProjectCleanerPalette::~ProjectCleanerPalette ()
 
 void ProjectCleanerPalette::PanelOpened (const DG::PanelOpenEvent& /*ev*/)
 {
+	UpdateButtonStates ();
 }
 
 void ProjectCleanerPalette::PanelCloseRequested (const DG::PanelCloseRequestEvent& /*ev*/, bool* /*accepted*/)
@@ -97,8 +100,34 @@ void ProjectCleanerPalette::PanelCloseRequested (const DG::PanelCloseRequestEven
 	Hide ();
 }
 
+bool ProjectCleanerPalette::IsFloorPlanActive ()
+{
+	API_WindowInfo windowInfo = {};
+	if (ACAPI_Database (APIDb_GetCurrentWindowID, &windowInfo) != NoError)
+		return false;
+
+	return windowInfo.typeID == APIWind_FloorPlanID;
+}
+
+void ProjectCleanerPalette::UpdateButtonStates ()
+{
+	bool enabled = IsFloorPlanActive ();
+
+	btnScanDeleteViews.SetStatus (enabled);
+	btnScanDeleteLibrary.SetStatus (enabled);
+	btnScanLayers.SetStatus (enabled);
+	btnProjectStats.SetStatus (enabled);
+	btnHatchArea.SetStatus (enabled);
+	btnLineLength.SetStatus (enabled);
+	btnCreateZones.SetStatus (enabled);
+	btnAbout.SetStatus (true);
+}
+
 void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 {
+	if (ev.GetSource () != &btnAbout && !IsFloorPlanActive ())
+		return;
+
 	if (ev.GetSource () == &btnScanDeleteViews)
 		Do_ScanDeleteUnusedViews ();
 	else if (ev.GetSource () == &btnScanDeleteLibrary)
@@ -111,6 +140,8 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_CalcHatchAreas ();
 	else if (ev.GetSource () == &btnLineLength)
 		Do_CalcLineLengths ();
+	else if (ev.GetSource () == &btnCreateZones)
+		Do_CreateZonesFromHatches ();
 	else if (ev.GetSource () == &btnAbout)
 		Do_About ();
 }

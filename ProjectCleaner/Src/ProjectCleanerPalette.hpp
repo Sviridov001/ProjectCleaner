@@ -17,7 +17,8 @@ private:
 		BtnProjectStats		= 4,
 		BtnHatchArea		= 5,
 		BtnLineLength		= 6,
-		BtnAbout			= 7
+		BtnCreateZones		= 7,
+		BtnAbout			= 8
 	};
 
 	DG::Button		btnScanDeleteViews;
@@ -26,6 +27,7 @@ private:
 	DG::Button		btnProjectStats;
 	DG::Button		btnHatchArea;
 	DG::Button		btnLineLength;
+	DG::Button		btnCreateZones;
 	DG::Button		btnAbout;
 
 	ProjectCleanerPalette ();
@@ -33,10 +35,15 @@ private:
 public:
 	virtual ~ProjectCleanerPalette ();
 
+	void							UpdateButtonStates ();
+
 	static ProjectCleanerPalette&	GetInstance ();
 	static Int32					PaletteRefId ();
 	static const GS::Guid&			PaletteGuid ();
 	static GSErrCode __ACENV_CALL	PaletteAPIControlCallBack (Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param);
+
+private:
+	bool							IsFloorPlanActive ();
 
 protected:
 	virtual void	PanelOpened (const DG::PanelOpenEvent& ev) override;

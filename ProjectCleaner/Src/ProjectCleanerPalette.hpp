@@ -18,7 +18,8 @@ private:
 		BtnHatchArea		= 5,
 		BtnLineLength		= 6,
 		BtnCreateZones		= 7,
-		BtnAbout			= 8
+		BtnCreateSlabs		= 8,
+		BtnAbout			= 9
 	};
 
 	DG::Button		btnScanDeleteViews;
@@ -28,6 +29,7 @@ private:
 	DG::Button		btnHatchArea;
 	DG::Button		btnLineLength;
 	DG::Button		btnCreateZones;
+	DG::Button		btnCreateSlabs;
 	DG::Button		btnAbout;
 
 	ProjectCleanerPalette ();

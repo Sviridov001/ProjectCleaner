@@ -115,6 +115,10 @@
 #define RS_MASTER_RENAME_TITLE	95	// rename title
 #define RS_MASTER_RENAMED	96	// "Renamed master layouts: "
 #define RS_MASTER_RENFAIL	97	// "Failed to rename: "
+#define RS_SLAB_TITLE		98	// slab creation report title
+#define RS_SLAB_NO_SEL		99	// "No hatches selected."
+#define RS_SLAB_CREATED		100	// "Created slabs: "
+#define RS_SLAB_FAIL		101	// "Failed to create: "
 
 // =============================================================================
 // Resource helpers
@@ -1092,9 +1096,152 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 			AppendNumber (report, failCount);
 		}
 
-		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
+
+// -----------------------------------------------------------------------------
+// Create one slab from hatch polygon (contour copied 1:1, holes and arcs kept)
+// -----------------------------------------------------------------------------
+
+static GSErrCode CreateSlabFromHatchPoly (API_Coord** srcCoords, Int32** srcPends, API_PolyArc** srcParcs,
+										   const API_Polygon& hatchPoly, short floorInd)
+{
+	// 1. Get defaults (thickness, materials, pens, level)
+	API_Element element = {};
+	API_ElementMemo memo = {};
+	element.header.type = API_SlabID;
+	GSErrCode err = ACAPI_Element_GetDefaults (&element, &memo);
+	if (err != NoError)
+		return err;
+
+	// 2. Handle closed contour
+	Int32 outerEnd = (*srcPends)[1];
+	bool closed = false;
+	if (outerEnd > 0) {
+		double dx = (*srcCoords)[outerEnd].x - (*srcCoords)[1].x;
+		double dy = (*srcCoords)[outerEnd].y - (*srcCoords)[1].y;
+		closed = (fabs (dx) < 1e-9 && fabs (dy) < 1e-9);
+	}
+	Int32 extraClosedVertex = closed ? 0 : 1;
+	Int32 totalCoords = hatchPoly.nCoords + extraClosedVertex;
+
+	// 3. Set poly descriptor and floor
+	element.header.floorInd = floorInd;
+	element.slab.poly.nCoords   = totalCoords;
+	element.slab.poly.nSubPolys = hatchPoly.nSubPolys;
+	element.slab.poly.nArcs     = hatchPoly.nArcs;
+
+	// 4. Allocate memo (1-based coords/pends, 0-based parcs; edgeTrims/sideMaterials -> defaults)
+	memo.coords = reinterpret_cast<API_Coord**> (BMAllocateHandle ((totalCoords + 1) * sizeof (API_Coord), ALLOCATE_CLEAR, 0));
+	memo.pends  = reinterpret_cast<Int32**> (BMAllocateHandle ((hatchPoly.nSubPolys + 1) * sizeof (Int32), ALLOCATE_CLEAR, 0));
+	if (hatchPoly.nArcs > 0)
+		memo.parcs = reinterpret_cast<API_PolyArc**> (BMAllocateHandle (hatchPoly.nArcs * sizeof (API_PolyArc), ALLOCATE_CLEAR, 0));
+	else
+		memo.parcs = nullptr;
+
+	if (memo.coords == nullptr || memo.pends == nullptr || (hatchPoly.nArcs > 0 && memo.parcs == nullptr)) {
+		ACAPI_DisposeElemMemoHdls (&memo);
+		return APIERR_MEMFULL;
+	}
+
+	// 5. Copy coords 1-based
+	Int32 dstIdx = 1;
+	for (Int32 i = 1; i <= hatchPoly.nCoords; i++) {
+		(*memo.coords)[dstIdx].x = (*srcCoords)[i].x;
+		(*memo.coords)[dstIdx].y = (*srcCoords)[i].y;
+		dstIdx++;
+	}
+	if (!closed) {
+		(*memo.coords)[dstIdx].x = (*srcCoords)[1].x;
+		(*memo.coords)[dstIdx].y = (*srcCoords)[1].y;
+		dstIdx++;
+	}
+
+	// Copy pends 1-based
+	for (Int32 sp = 1; sp <= hatchPoly.nSubPolys; sp++)
+		(*memo.pends)[sp] = (*srcPends)[sp];
+	if (!closed)
+		(*memo.pends)[1] = totalCoords;
+
+	// Copy arcs 0-based
+	if (hatchPoly.nArcs > 0 && memo.parcs != nullptr) {
+		for (Int32 i = 0; i < hatchPoly.nArcs; i++) {
+			(*memo.parcs)[i].begIndex = (*srcParcs)[i].begIndex;
+			(*memo.parcs)[i].endIndex = (*srcParcs)[i].endIndex;
+			(*memo.parcs)[i].arcAngle = (*srcParcs)[i].arcAngle;
+		}
+	}
+
+	err = ACAPI_Element_Create (&element, &memo);
+	ACAPI_DisposeElemMemoHdls (&memo);
+	return err;
+}
+
+GSErrCode Do_CreateSlabsFromHatches (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_SLAB_TITLE);
+
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
 		return NoError;
 	}
+
+	UInt32 createdCount = 0;
+	UInt32 failCount = 0;
+
+	err = ACAPI_CallUndoableCommand ("Создание перекрытий из штриховок", [&] () -> GSErrCode {
+		for (const API_Neig& neig : selNeigs) {
+			if (neig.neigID != APINeig_Hatch)
+				continue;
+
+			API_Element elem = {};
+			elem.header.guid = neig.guid;
+			if (ACAPI_Element_Get (&elem) != NoError)
+				continue;
+			if (elem.header.type != API_HatchID)
+				continue;
+
+			API_ElementMemo memo = {};
+			BNZeroMemory (&memo, sizeof (API_ElementMemo));
+			err = ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_All);
+			if (err != NoError)
+				continue;
+			if (memo.coords == nullptr || memo.pends == nullptr || elem.hatch.poly.nCoords < 3) {
+				ACAPI_DisposeElemMemoHdls (&memo);
+				continue;
+			}
+
+			err = CreateSlabFromHatchPoly (memo.coords, memo.pends, memo.parcs, elem.hatch.poly, elem.header.floorInd);
+			if (err == NoError)
+				createdCount++;
+			else
+				failCount++;
+
+			ACAPI_DisposeElemMemoHdls (&memo);
+		}
+		return NoError;
+	});
+
+	if (createdCount == 0 && failCount == 0) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
+		return NoError;
+	}
+	GS::UniString report;
+	report.Append (GetResString (STR_RES_REPORT, RS_SLAB_CREATED));
+	AppendNumber (report, createdCount);
+	if (failCount > 0) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_SLAB_FAIL));
+		AppendNumber (report, failCount);
+	}
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	return NoError;
+}
 
 GSErrCode Do_CalcLineLengths (void)
 {
@@ -1921,8 +2068,9 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 5:		return Do_CalcHatchAreas ();
 		case 6:		return Do_CalcLineLengths ();
 		case 7:		return Do_CreateZonesFromHatches ();
-		case 8:		return Do_TogglePalette ();
-		case 9:		return Do_About ();
+		case 8:		return Do_CreateSlabsFromHatches ();
+		case 9:		return Do_TogglePalette ();
+		case 10:		return Do_About ();
 		default:	break;
 	}
 	return NoError;

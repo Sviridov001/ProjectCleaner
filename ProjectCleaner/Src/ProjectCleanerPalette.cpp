@@ -8,6 +8,7 @@ extern GSErrCode Do_ScanUnusedMasterLayouts (void);
 extern GSErrCode Do_CalcHatchAreas (void);
 extern GSErrCode Do_CalcLineLengths (void);
 extern GSErrCode Do_CreateZonesFromHatches (void);
+extern GSErrCode Do_CreateSlabsFromHatches (void);
 extern GSErrCode Do_About (void);
 
 #define PAL_RES_ID 32600
@@ -76,6 +77,7 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnHatchArea		(GetReference (), BtnHatchArea),
 	btnLineLength		(GetReference (), BtnLineLength),
 	btnCreateZones		(GetReference (), BtnCreateZones),
+	btnCreateSlabs		(GetReference (), BtnCreateSlabs),
 	btnAbout			(GetReference (), BtnAbout)
 {
 	this->Attach (*this);
@@ -120,6 +122,7 @@ void ProjectCleanerPalette::UpdateButtonStates ()
 	btnHatchArea.SetStatus (enabled);
 	btnLineLength.SetStatus (enabled);
 	btnCreateZones.SetStatus (enabled);
+	btnCreateSlabs.SetStatus (enabled);
 	btnAbout.SetStatus (true);
 }
 
@@ -142,6 +145,8 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_CalcLineLengths ();
 	else if (ev.GetSource () == &btnCreateZones)
 		Do_CreateZonesFromHatches ();
+	else if (ev.GetSource () == &btnCreateSlabs)
+		Do_CreateSlabsFromHatches ();
 	else if (ev.GetSource () == &btnAbout)
 		Do_About ();
 }

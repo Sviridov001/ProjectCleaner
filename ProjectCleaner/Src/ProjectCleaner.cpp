@@ -1366,6 +1366,161 @@ static GSErrCode CreateDimChainForWall (const API_Element& wallElem, const GS::A
 	return err;
 }
 
+// -----------------------------------------------------------------------------
+// Associative dimension chain: jambs stick to opening hole corners (WindHole/DoorHole),
+// wall ends stay static. Falls back to static chain on any failure.
+// -----------------------------------------------------------------------------
+
+struct DimOpenInfo {
+	API_Guid guid;
+	API_ElemTypeID elemType; // API_WindowID or API_DoorID
+	double loc;              // center along wall
+	double w;                // clear width
+};
+
+static bool FindHoleHotspot (const API_Guid& openGuid, API_ElemTypeID elemType, double jambDist,
+							  const API_Coord& wallBeg, double ux, double uy, Int32& outInIndex, API_Coord& outCoord)
+{
+	GS::Array<API_ElementHotspot> hotspots;
+	if (ACAPI_Element_GetHotspots (openGuid, &hotspots) != NoError)
+		return false;
+
+	API_NeigID holeID = (elemType == API_DoorID) ? APINeig_DoorHole : APINeig_WindHole;
+	for (const auto& hs : hotspots) {
+		const API_Neig& neig = hs.first;
+		if (neig.neigID != holeID)
+			continue;
+		double proj = (hs.second.x - wallBeg.x) * ux + (hs.second.y - wallBeg.y) * uy;
+		if (fabs (proj - jambDist) > 0.01) // 1 cm tolerance
+			continue;
+		outInIndex = neig.inIndex;
+		outCoord.x = hs.second.x;
+		outCoord.y = hs.second.y;
+		return true;
+	}
+	return false;
+}
+
+static GSErrCode CreateAssocDimChainForWall (const API_Element& wallElem, const GS::Array<DimOpenInfo>& openings)
+{
+	API_Coord B = wallElem.wall.begC;
+	API_Coord E = wallElem.wall.endC;
+	double dx = E.x - B.x;
+	double dy = E.y - B.y;
+	double L = sqrt (dx * dx + dy * dy);
+	if (L < 1e-9)
+		return APIERR_GENERAL;
+	dx /= L; dy /= L;
+	double nx = -dy, ny = dx;
+
+	// Sorted witness distances (same as static)
+	GS::Array<double> dists;
+	dists.Push (0.0);
+	for (const auto& op : openings) {
+		double l = op.loc - op.w / 2.0, r = op.loc + op.w / 2.0;
+		if (l < 0.0) l = 0.0;
+		if (r > L) r = L;
+		if (r - l < 1e-6)
+			continue;
+		dists.Push (l);
+		dists.Push (r);
+	}
+	dists.Push (L);
+	for (UInt32 i = 0; i < dists.GetSize (); i++) {
+		for (UInt32 j = i + 1; j < dists.GetSize (); j++) {
+			if (dists[j] < dists[i]) {
+				double t = dists[i]; dists[i] = dists[j]; dists[j] = t;
+			}
+		}
+	}
+	GS::Array<double> pts;
+	for (UInt32 i = 0; i < dists.GetSize (); i++) {
+		if (i == 0 || fabs (dists[i] - pts[pts.GetSize () - 1]) > 1e-4)
+			pts.Push (dists[i]);
+	}
+	if (pts.GetSize () < 2)
+		return APIERR_GENERAL;
+
+	const double offset = 1.0;
+	API_Coord refC;
+	refC.x = B.x + nx * offset;
+	refC.y = B.y + ny * offset;
+
+	API_Element element = {};
+	API_ElementMemo memo = {};
+	element.header.type = API_DimensionID;
+	element.header.floorInd = wallElem.header.floorInd;
+	element.header.layer = wallElem.header.layer;
+	GSErrCode err = ACAPI_Element_GetDefaults (&element, &memo);
+	if (err != NoError)
+		return err;
+
+	element.dimension.dimAppear = APIApp_Normal;
+	element.dimension.textPos = APIPos_Above;
+	element.dimension.textWay = APIDir_Parallel;
+	element.dimension.defStaticDim = false; // associative
+	element.dimension.usedIn3D = false;
+	element.dimension.horizontalText = false;
+	element.dimension.refC = refC;
+	element.dimension.direction.x = dx;
+	element.dimension.direction.y = dy;
+	element.dimension.nDimElem = (Int32) pts.GetSize ();
+
+	memo.dimElems = reinterpret_cast<API_DimElem**> (BMAllocateHandle (element.dimension.nDimElem * sizeof (API_DimElem), ALLOCATE_CLEAR, 0));
+	if (memo.dimElems == nullptr) {
+		ACAPI_DisposeElemMemoHdls (&memo);
+		return APIERR_MEMFULL;
+	}
+
+	for (Int32 i = 0; i < element.dimension.nDimElem; i++) {
+		double d = pts[(UInt32) i];
+		API_DimElem& de = (*memo.dimElems)[i];
+		de.note = element.dimension.defNote;
+		de.witnessVal = element.dimension.defWitnessVal;
+		de.witnessForm = element.dimension.defWitnessForm;
+
+		bool isEnd = (i == 0 || i == element.dimension.nDimElem - 1);
+		bool linked = false;
+		if (!isEnd) {
+			// Find opening jamb at this distance
+			for (const auto& op : openings) {
+				double l = op.loc - op.w / 2.0, r = op.loc + op.w / 2.0;
+				if (fabs (d - l) > 1e-4 && fabs (d - r) > 1e-4)
+					continue;
+				Int32 holeIdx = 0;
+				API_Coord hc;
+				if (!FindHoleHotspot (op.guid, op.elemType, d, B, dx, dy, holeIdx, hc))
+					return APIERR_GENERAL; // hotspot not found -> whole wall falls back to static
+				de.base.base.type = API_ElemType (op.elemType);
+				de.base.base.guid = op.guid;
+				de.base.base.line = false;
+				de.base.base.special = 1; // WindHole/DoorHole
+				de.base.base.inIndex = holeIdx;
+				de.base.loc = hc;
+				de.fixedPos = false;
+				de.pos.x = refC.x + dx * d;
+				de.pos.y = refC.y + dy * d;
+				linked = true;
+				break;
+			}
+		}
+		if (!linked) {
+			// Wall end or unmatched jamb -> static point
+			API_Coord w;
+			w.x = B.x + dx * d;
+			w.y = B.y + dy * d;
+			de.base.loc = w;
+			de.fixedPos = true;
+			de.pos.x = refC.x + dx * d;
+			de.pos.y = refC.y + dy * d;
+		}
+	}
+
+	err = ACAPI_Element_Create (&element, &memo);
+	ACAPI_DisposeElemMemoHdls (&memo);
+	return err;
+}
+
 GSErrCode Do_DimChainWallOpenings (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_DIMCHAIN_TITLE);
@@ -1405,6 +1560,7 @@ GSErrCode Do_DimChainWallOpenings (void)
 
 	UInt32 createdCount = 0;
 	UInt32 skippedCount = 0;
+	UInt32 staticFallbackCount = 0;
 
 	err = ACAPI_CallUndoableCommand ("Цепочка размеров проёмов", [&] () -> GSErrCode {
 		for (const API_Guid& wallGuid : walls) {
@@ -1427,56 +1583,67 @@ GSErrCode Do_DimChainWallOpenings (void)
 				continue;
 			}
 
-			// Gather openings: windows + doors (+ generic openings by owner)
-			GS::Array<std::pair<double, double>> openings;
-			GS::Array<API_Guid> connGuids;
-			ACAPI_Element_GetConnectedElements (wallGuid, API_WindowID, &connGuids);
-			{
-				GS::Array<API_Guid> doors;
-				ACAPI_Element_GetConnectedElements (wallGuid, API_DoorID, &doors);
-				for (const auto& g : doors) connGuids.Push (g);
-			}
-			for (const API_Guid& og : connGuids) {
+		// Gather openings: windows + doors (+ generic openings by owner)
+		GS::Array<DimOpenInfo> openInfos;
+		GS::Array<std::pair<double, double>> openings; // for static fallback
+		GS::Array<API_Guid> connGuids;
+		ACAPI_Element_GetConnectedElements (wallGuid, API_WindowID, &connGuids);
+		{
+			GS::Array<API_Guid> doors;
+			ACAPI_Element_GetConnectedElements (wallGuid, API_DoorID, &doors);
+			for (const auto& g : doors) connGuids.Push (g);
+		}
+		for (const API_Guid& og : connGuids) {
+			API_Element op = {};
+			op.header.guid = og;
+			if (ACAPI_Element_Get (&op) != NoError)
+				continue;
+			double loc = -1.0, w = 0.0;
+			API_ElemTypeID ot = API_ZombieElemID;
+			if (op.header.type == API_WindowID) { loc = op.window.objLoc; w = op.window.openingBase.width; ot = API_WindowID; }
+			else if (op.header.type == API_DoorID) { loc = op.door.objLoc; w = op.door.openingBase.width; ot = API_DoorID; }
+			else continue;
+			if (w < 1e-6) continue;
+			DimOpenInfo info;
+			info.guid = og; info.elemType = ot; info.loc = loc; info.w = w;
+			openInfos.Push (info);
+			openings.Push (std::make_pair (loc - w / 2.0, loc + w / 2.0));
+		}
+		// Generic API_OpeningID elements: position from frame basePoint projected on axis (static only)
+		{
+			GS::Array<API_Guid> genOps;
+			ACAPI_Element_GetConnectedElements (wallGuid, API_OpeningID, &genOps);
+			for (const API_Guid& og : genOps) {
 				API_Element op = {};
 				op.header.guid = og;
 				if (ACAPI_Element_Get (&op) != NoError)
 					continue;
-				double loc = -1.0, w = 0.0;
-				if (op.header.type == API_WindowID) { loc = op.window.objLoc; w = op.window.openingBase.width; }
-				else if (op.header.type == API_DoorID) { loc = op.door.objLoc; w = op.door.openingBase.width; }
-				else continue;
+				if (op.header.type != API_OpeningID)
+					continue;
+				double w = op.opening.extrusionGeometryData.parameters.width;
 				if (w < 1e-6) continue;
-				openings.Push (std::make_pair (loc - w / 2.0, loc + w / 2.0));
+				API_Coord3D bp = op.opening.extrusionGeometryData.frame.basePoint;
+				double ux = dx / L, uy = dy / L;
+				double proj = (bp.x - wall.wall.begC.x) * ux + (bp.y - wall.wall.begC.y) * uy;
+				openings.Push (std::make_pair (proj - w / 2.0, proj + w / 2.0));
 			}
-			// Generic API_OpeningID elements: position from frame basePoint projected on axis
-			{
-				GS::Array<API_Guid> genOps;
-				ACAPI_Element_GetConnectedElements (wallGuid, API_OpeningID, &genOps);
-				for (const API_Guid& og : genOps) {
-					API_Element op = {};
-					op.header.guid = og;
-					if (ACAPI_Element_Get (&op) != NoError)
-						continue;
-					if (op.header.type != API_OpeningID)
-						continue;
-					double w = op.opening.extrusionGeometryData.parameters.width;
-					if (w < 1e-6) continue;
-					API_Coord3D bp = op.opening.extrusionGeometryData.frame.basePoint;
-					double ux = dx / L, uy = dy / L;
-					double proj = (bp.x - wall.wall.begC.x) * ux + (bp.y - wall.wall.begC.y) * uy;
-					openings.Push (std::make_pair (proj - w / 2.0, proj + w / 2.0));
-				}
-			}
+		}
 
-			if (openings.IsEmpty ()) {
-				skippedCount++;
-				continue;
-			}
+		if (openings.IsEmpty ()) {
+			skippedCount++;
+			continue;
+		}
 
-			if (CreateDimChainForWall (wall, openings) == NoError)
-				createdCount++;
-			else
-				skippedCount++;
+		// Try associative first (jambs stick to openings), fallback to static
+		if (!openInfos.IsEmpty () && CreateAssocDimChainForWall (wall, openInfos) == NoError) {
+			createdCount++;
+		} else if (CreateDimChainForWall (wall, openings) == NoError) {
+			createdCount++;
+			if (!openInfos.IsEmpty ())
+				staticFallbackCount++;
+		} else {
+			skippedCount++;
+		}
 		}
 		return NoError;
 	});
@@ -1484,6 +1651,9 @@ GSErrCode Do_DimChainWallOpenings (void)
 	GS::UniString report;
 	report.Append (GetResString (STR_RES_REPORT, RS_DIMCHAIN_CREATED));
 	AppendNumber (report, createdCount);
+	if (staticFallbackCount > 0) {
+		report.Append (GS::UniString::Printf ("\n(static-цепочек: %u — associative не привязался)", staticFallbackCount));
+	}
 	if (skippedCount > 0) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_DIMCHAIN_SKIPPED));

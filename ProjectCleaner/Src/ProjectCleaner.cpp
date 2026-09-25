@@ -119,6 +119,10 @@
 #define RS_SLAB_NO_SEL		99	// "No hatches selected."
 #define RS_SLAB_CREATED		100	// "Created slabs: "
 #define RS_SLAB_FAIL		101	// "Failed to create: "
+#define RS_DIMCHAIN_TITLE	102	// dimension chain report title
+#define RS_DIMCHAIN_NO_SEL	103	// "No walls selected."
+#define RS_DIMCHAIN_CREATED	104	// "Created chains: "
+#define RS_DIMCHAIN_SKIPPED	105	// "Skipped (curved/no openings): "
 
 // =============================================================================
 // Resource helpers
@@ -801,6 +805,8 @@ GSErrCode Do_CalcHatchAreas (void)
 	GS::Array<API_Neig> selNeigs;
 	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
 	if (err != NoError || selNeigs.IsEmpty ()) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL)), true);
 		return NoError;
 	}
@@ -811,9 +817,11 @@ GSErrCode Do_CalcHatchAreas (void)
 	UInt32 totalHatches = 0;
 	double totalArea = 0.0;
 
+	GS::HashSet<API_Guid> seenHatches;
 	for (const API_Neig& neig : selNeigs) {
-		if (neig.neigID != APINeig_Hatch)
+		if (seenHatches.Contains (neig.guid))
 			continue;
+		seenHatches.Add (neig.guid);
 
 		API_Element elem;
 		BNZeroMemory (&elem, sizeof (API_Element));
@@ -911,6 +919,8 @@ GSErrCode Do_CalcHatchAreas (void)
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
 	ACAPI_WriteReport (fullReport, true);
 	CopyTextToClipboard (clip);
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
 }
 
@@ -1028,6 +1038,8 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 		GS::Array<API_Neig> selNeigs;
 		GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
 		if (err != NoError || selNeigs.IsEmpty ()) {
+			if (selInfo.marquee.coords != nullptr)
+				BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
 			return NoError;
 		}
@@ -1036,13 +1048,15 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 		UInt32 createdCount = 0;
 		UInt32 failCount = 0;
 
+		GS::HashSet<API_Guid> seenForZones;
 		err = ACAPI_CallUndoableCommand ("Создание зон из штриховок",
 			[&] () -> GSErrCode {
 				UInt32 zoneNumber = 0;
 
 				for (const API_Neig& neig : selNeigs) {
-					if (neig.neigID != APINeig_Hatch)
+					if (seenForZones.Contains (neig.guid))
 						continue;
+					seenForZones.Add (neig.guid);
 
 					API_Element elem;
 					BNZeroMemory (&elem, sizeof (API_Element));
@@ -1083,6 +1097,8 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 
 		// 3. Report
 		if (createdCount == 0 && failCount == 0) {
+			if (selInfo.marquee.coords != nullptr)
+				BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
 			return NoError;
 		}
@@ -1097,6 +1113,8 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 		}
 
 	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
 }
 
@@ -1187,6 +1205,8 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 	GS::Array<API_Neig> selNeigs;
 	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
 	if (err != NoError || selNeigs.IsEmpty ()) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
 		return NoError;
 	}
@@ -1194,10 +1214,12 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 	UInt32 createdCount = 0;
 	UInt32 failCount = 0;
 
+	GS::HashSet<API_Guid> seenForSlabs;
 	err = ACAPI_CallUndoableCommand ("Создание перекрытий из штриховок", [&] () -> GSErrCode {
 		for (const API_Neig& neig : selNeigs) {
-			if (neig.neigID != APINeig_Hatch)
+			if (seenForSlabs.Contains (neig.guid))
 				continue;
+			seenForSlabs.Add (neig.guid);
 
 			API_Element elem = {};
 			elem.header.guid = neig.guid;
@@ -1228,6 +1250,8 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 	});
 
 	if (createdCount == 0 && failCount == 0) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
 		return NoError;
 	}
@@ -1240,6 +1264,234 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 		AppendNumber (report, failCount);
 	}
 	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+	return NoError;
+}
+
+// -----------------------------------------------------------------------------
+// Dimension chain through wall openings (static chain, wall start -> jambs -> end)
+// -----------------------------------------------------------------------------
+
+static GSErrCode CreateDimChainForWall (const API_Element& wallElem, const GS::Array<std::pair<double, double>>& openings)
+{
+	API_Coord B = wallElem.wall.begC;
+	API_Coord E = wallElem.wall.endC;
+	double dx = E.x - B.x;
+	double dy = E.y - B.y;
+	double L = sqrt (dx * dx + dy * dy);
+	if (L < 1e-9)
+		return APIERR_GENERAL;
+	dx /= L; dy /= L;
+	double nx = -dy, ny = dx; // wall normal
+
+	// Witness points along wall axis: 0, edges..., L
+	GS::Array<double> dists;
+	dists.Push (0.0);
+	for (const auto& op : openings) {
+		double l = op.first, r = op.second;
+		if (l < 0.0) l = 0.0;
+		if (r > L) r = L;
+		if (r - l < 1e-6)
+			continue;
+		dists.Push (l);
+		dists.Push (r);
+	}
+	dists.Push (L);
+	// Sort + merge near-duplicates
+	for (UInt32 i = 0; i < dists.GetSize (); i++) {
+		for (UInt32 j = i + 1; j < dists.GetSize (); j++) {
+			if (dists[j] < dists[i]) {
+				double t = dists[i]; dists[i] = dists[j]; dists[j] = t;
+			}
+		}
+	}
+	GS::Array<double> pts;
+	for (UInt32 i = 0; i < dists.GetSize (); i++) {
+		if (i == 0 || fabs (dists[i] - pts[pts.GetSize () - 1]) > 1e-4)
+			pts.Push (dists[i]);
+	}
+	if (pts.GetSize () < 2)
+		return APIERR_GENERAL;
+
+	// Dimension line: offset 1.0 m along normal
+	const double offset = 1.0;
+	API_Coord refC;
+	refC.x = B.x + nx * offset;
+	refC.y = B.y + ny * offset;
+
+	API_Element element = {};
+	API_ElementMemo memo = {};
+	element.header.type = API_DimensionID;
+	element.header.floorInd = wallElem.header.floorInd;
+	element.header.layer = wallElem.header.layer;
+	GSErrCode err = ACAPI_Element_GetDefaults (&element, &memo);
+	if (err != NoError)
+		return err;
+
+	element.dimension.dimAppear = APIApp_Normal; // chain
+	element.dimension.textPos = APIPos_Above;
+	element.dimension.textWay = APIDir_Parallel;
+	element.dimension.defStaticDim = true;
+	element.dimension.usedIn3D = false;
+	element.dimension.horizontalText = false;
+	element.dimension.refC = refC;
+	element.dimension.direction.x = dx;
+	element.dimension.direction.y = dy;
+	element.dimension.nDimElem = (Int32) pts.GetSize ();
+
+	memo.dimElems = reinterpret_cast<API_DimElem**> (BMAllocateHandle (element.dimension.nDimElem * sizeof (API_DimElem), ALLOCATE_CLEAR, 0));
+	if (memo.dimElems == nullptr) {
+		ACAPI_DisposeElemMemoHdls (&memo);
+		return APIERR_MEMFULL;
+	}
+
+	for (Int32 i = 0; i < element.dimension.nDimElem; i++) {
+		double d = pts[(UInt32) i];
+		API_Coord w;
+		w.x = B.x + dx * d;
+		w.y = B.y + dy * d;
+		API_DimElem& de = (*memo.dimElems)[i];
+		de.base.loc = w;
+		de.note = element.dimension.defNote;
+		de.witnessVal = element.dimension.defWitnessVal;
+		de.witnessForm = element.dimension.defWitnessForm;
+		de.fixedPos = true;
+		de.pos.x = refC.x + dx * d;
+		de.pos.y = refC.y + dy * d;
+	}
+
+	err = ACAPI_Element_Create (&element, &memo);
+	ACAPI_DisposeElemMemoHdls (&memo);
+	return err;
+}
+
+GSErrCode Do_DimChainWallOpenings (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_DIMCHAIN_TITLE);
+
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	// Collect unique walls
+	GS::HashSet<API_Guid> seen;
+	GS::Array<API_Guid> walls;
+	for (const API_Neig& neig : selNeigs) {
+		if (seen.Contains (neig.guid))
+			continue;
+		seen.Add (neig.guid);
+		API_Element elem = {};
+		elem.header.guid = neig.guid;
+		if (ACAPI_Element_Get (&elem) != NoError)
+			continue;
+		if (elem.header.type == API_WallID)
+			walls.Push (neig.guid);
+	}
+
+	if (walls.IsEmpty ()) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	UInt32 createdCount = 0;
+	UInt32 skippedCount = 0;
+
+	err = ACAPI_CallUndoableCommand ("Цепочка размеров проёмов", [&] () -> GSErrCode {
+		for (const API_Guid& wallGuid : walls) {
+			API_Element wall = {};
+			wall.header.guid = wallGuid;
+			if (ACAPI_Element_Get (&wall) != NoError) {
+				skippedCount++;
+				continue;
+			}
+			// Only straight normal walls
+			if (wall.wall.type != APIWtyp_Normal || fabs (wall.wall.angle) > 1e-9) {
+				skippedCount++;
+				continue;
+			}
+			double dx = wall.wall.endC.x - wall.wall.begC.x;
+			double dy = wall.wall.endC.y - wall.wall.begC.y;
+			double L = sqrt (dx * dx + dy * dy);
+			if (L < 1e-6) {
+				skippedCount++;
+				continue;
+			}
+
+			// Gather openings: windows + doors (+ generic openings by owner)
+			GS::Array<std::pair<double, double>> openings;
+			GS::Array<API_Guid> connGuids;
+			ACAPI_Element_GetConnectedElements (wallGuid, API_WindowID, &connGuids);
+			{
+				GS::Array<API_Guid> doors;
+				ACAPI_Element_GetConnectedElements (wallGuid, API_DoorID, &doors);
+				for (const auto& g : doors) connGuids.Push (g);
+			}
+			for (const API_Guid& og : connGuids) {
+				API_Element op = {};
+				op.header.guid = og;
+				if (ACAPI_Element_Get (&op) != NoError)
+					continue;
+				double loc = -1.0, w = 0.0;
+				if (op.header.type == API_WindowID) { loc = op.window.objLoc; w = op.window.openingBase.width; }
+				else if (op.header.type == API_DoorID) { loc = op.door.objLoc; w = op.door.openingBase.width; }
+				else continue;
+				if (w < 1e-6) continue;
+				openings.Push (std::make_pair (loc - w / 2.0, loc + w / 2.0));
+			}
+			// Generic API_OpeningID elements: position from frame basePoint projected on axis
+			{
+				GS::Array<API_Guid> genOps;
+				ACAPI_Element_GetConnectedElements (wallGuid, API_OpeningID, &genOps);
+				for (const API_Guid& og : genOps) {
+					API_Element op = {};
+					op.header.guid = og;
+					if (ACAPI_Element_Get (&op) != NoError)
+						continue;
+					if (op.header.type != API_OpeningID)
+						continue;
+					double w = op.opening.extrusionGeometryData.parameters.width;
+					if (w < 1e-6) continue;
+					API_Coord3D bp = op.opening.extrusionGeometryData.frame.basePoint;
+					double ux = dx / L, uy = dy / L;
+					double proj = (bp.x - wall.wall.begC.x) * ux + (bp.y - wall.wall.begC.y) * uy;
+					openings.Push (std::make_pair (proj - w / 2.0, proj + w / 2.0));
+				}
+			}
+
+			if (openings.IsEmpty ()) {
+				skippedCount++;
+				continue;
+			}
+
+			if (CreateDimChainForWall (wall, openings) == NoError)
+				createdCount++;
+			else
+				skippedCount++;
+		}
+		return NoError;
+	});
+
+	GS::UniString report;
+	report.Append (GetResString (STR_RES_REPORT, RS_DIMCHAIN_CREATED));
+	AppendNumber (report, createdCount);
+	if (skippedCount > 0) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_DIMCHAIN_SKIPPED));
+		AppendNumber (report, skippedCount);
+	}
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
 }
 
@@ -2071,6 +2323,7 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 8:		return Do_CreateSlabsFromHatches ();
 		case 9:		return Do_TogglePalette ();
 		case 10:		return Do_About ();
+		case 11:		return Do_DimChainWallOpenings ();
 		default:	break;
 	}
 	return NoError;

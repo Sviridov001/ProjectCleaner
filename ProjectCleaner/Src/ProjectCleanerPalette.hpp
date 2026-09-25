@@ -19,7 +19,8 @@ private:
 		BtnLineLength		= 6,
 		BtnCreateZones		= 7,
 		BtnCreateSlabs		= 8,
-		BtnAbout			= 9
+		BtnDimChain			= 9,
+		BtnAbout			= 10
 	};
 
 	DG::Button		btnScanDeleteViews;
@@ -30,6 +31,7 @@ private:
 	DG::Button		btnLineLength;
 	DG::Button		btnCreateZones;
 	DG::Button		btnCreateSlabs;
+	DG::Button		btnDimChain;
 	DG::Button		btnAbout;
 
 	ProjectCleanerPalette ();

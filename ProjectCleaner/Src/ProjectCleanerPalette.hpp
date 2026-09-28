@@ -20,7 +20,8 @@ private:
 		BtnCreateZones		= 7,
 		BtnCreateSlabs		= 8,
 		BtnDimChain			= 9,
-		BtnAbout			= 10
+		BtnWallChain		= 10,
+		BtnAbout			= 11
 	};
 
 	DG::Button		btnScanDeleteViews;
@@ -32,6 +33,7 @@ private:
 	DG::Button		btnCreateZones;
 	DG::Button		btnCreateSlabs;
 	DG::Button		btnDimChain;
+	DG::Button		btnWallChain;
 	DG::Button		btnAbout;
 
 	ProjectCleanerPalette ();

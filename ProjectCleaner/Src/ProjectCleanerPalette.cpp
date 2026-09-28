@@ -10,6 +10,7 @@ extern GSErrCode Do_CalcLineLengths (void);
 extern GSErrCode Do_CreateZonesFromHatches (void);
 extern GSErrCode Do_CreateSlabsFromHatches (void);
 extern GSErrCode Do_DimChainWallOpenings (void);
+extern GSErrCode Do_WallThicknessChain (void);
 extern GSErrCode Do_About (void);
 
 #define PAL_RES_ID 32600
@@ -80,6 +81,7 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnCreateZones		(GetReference (), BtnCreateZones),
 	btnCreateSlabs		(GetReference (), BtnCreateSlabs),
 	btnDimChain			(GetReference (), BtnDimChain),
+	btnWallChain		(GetReference (), BtnWallChain),
 	btnAbout			(GetReference (), BtnAbout)
 {
 	this->Attach (*this);
@@ -126,6 +128,7 @@ void ProjectCleanerPalette::UpdateButtonStates ()
 	btnCreateZones.SetStatus (enabled);
 	btnCreateSlabs.SetStatus (enabled);
 	btnDimChain.SetStatus (enabled);
+	btnWallChain.SetStatus (enabled);
 	btnAbout.SetStatus (true);
 }
 
@@ -150,6 +153,8 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_CreateZonesFromHatches ();
 	else if (ev.GetSource () == &btnCreateSlabs)
 		Do_CreateSlabsFromHatches ();
+	else if (ev.GetSource () == &btnWallChain)
+		Do_WallThicknessChain ();
 	else if (ev.GetSource () == &btnDimChain)
 		Do_DimChainWallOpenings ();
 	else if (ev.GetSource () == &btnAbout)

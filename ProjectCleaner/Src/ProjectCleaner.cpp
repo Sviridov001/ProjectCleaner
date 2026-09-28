@@ -123,6 +123,10 @@
 #define RS_DIMCHAIN_NO_SEL	103	// "No walls selected."
 #define RS_DIMCHAIN_CREATED	104	// "Created chains: "
 #define RS_DIMCHAIN_SKIPPED	105	// "Skipped (curved/no openings): "
+#define RS_WALLCHAIN_TITLE	106	// wall thickness chain title
+#define RS_WALLCHAIN_NO_SEL	107	// "No parallel walls selected."
+#define RS_WALLCHAIN_CREATED	108	// "Created chains: "
+#define RS_WALLCHAIN_SKIPPED	109	// "Skipped (non-parallel/curved): "
 
 // =============================================================================
 // Resource helpers
@@ -1665,6 +1669,201 @@ GSErrCode Do_DimChainWallOpenings (void)
 	return NoError;
 }
 
+// -----------------------------------------------------------------------------
+// Dimension chain of thicknesses + gaps of selected parallel walls (static chain)
+// Faces computed from ref line via offsetFromOutside (covers flipped/composite).
+// -----------------------------------------------------------------------------
+
+GSErrCode Do_WallThicknessChain (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_WALLCHAIN_TITLE);
+
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	// Collect unique straight walls
+	GS::HashSet<API_Guid> seen;
+	GS::Array<API_Element> walls;
+	for (const API_Neig& neig : selNeigs) {
+		if (seen.Contains (neig.guid))
+			continue;
+		seen.Add (neig.guid);
+		API_Element elem = {};
+		elem.header.guid = neig.guid;
+		if (ACAPI_Element_Get (&elem) != NoError)
+			continue;
+		if (elem.header.type != API_WallID)
+			continue;
+		if (elem.wall.type != APIWtyp_Normal || fabs (elem.wall.angle) > 1e-9)
+			continue;
+		if (fabs (elem.wall.thickness - elem.wall.thickness1) > 1e-6)
+			continue; // trapezoid — non-parallel faces
+		double dx = elem.wall.endC.x - elem.wall.begC.x;
+		double dy = elem.wall.endC.y - elem.wall.begC.y;
+		if (sqrt (dx * dx + dy * dy) < 1e-6)
+			continue;
+		walls.Push (elem);
+	}
+
+	if (walls.GetSize () < 2) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	// Reference direction from first wall; keep only parallel ones (tolerance ~0.5 deg)
+	double rdx = walls[0].wall.endC.x - walls[0].wall.begC.x;
+	double rdy = walls[0].wall.endC.y - walls[0].wall.begC.y;
+	double rL = sqrt (rdx * rdx + rdy * rdy);
+	rdx /= rL; rdy /= rL;
+	GS::Array<API_Element> parWalls;
+	UInt32 skippedCount = 0;
+	for (const auto& w : walls) {
+		double dx = w.wall.endC.x - w.wall.begC.x;
+		double dy = w.wall.endC.y - w.wall.begC.y;
+		double L = sqrt (dx * dx + dy * dy);
+		dx /= L; dy /= L;
+		double cross = fabs (dx * rdy - dy * rdx); // sin of angle
+		if (cross > 0.0087) { // > ~0.5 deg
+			skippedCount++;
+			continue;
+		}
+		parWalls.Push (w);
+	}
+	if (parWalls.GetSize () < 2) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	// Dimension axis = perpendicular to walls; use normal of first wall
+	double mx = -rdy, my = rdx;
+	// Faces of each wall projected on axis
+	GS::Array<double> faceT;
+	GS::Array<API_Coord> faceP; // witness point (use beg end of each face)
+	for (const auto& w : parWalls) {
+		double dx = w.wall.endC.x - w.wall.begC.x;
+		double dy = w.wall.endC.y - w.wall.begC.y;
+		double L = sqrt (dx * dx + dy * dy);
+		double ux = dx / L, uy = dy / L;
+		double nx = -uy, ny = ux;
+		double s = w.wall.flipped ? -1.0 : 1.0;
+		double dOut = w.wall.offsetFromOutside;
+		double dIn = w.wall.thickness - w.wall.offsetFromOutside;
+		// Face lines: point + dir; project beg points on axis
+		double tOut = (w.wall.begC.x + nx * s * dOut) * mx + (w.wall.begC.y + ny * s * dOut) * my;
+		double tIn  = (w.wall.begC.x - nx * s * dIn) * mx + (w.wall.begC.y - ny * s * dIn) * my;
+		API_Coord pOut, pIn;
+		pOut.x = w.wall.begC.x + nx * s * dOut; pOut.y = w.wall.begC.y + ny * s * dOut;
+		pIn.x  = w.wall.begC.x - nx * s * dIn;  pIn.y  = w.wall.begC.y - ny * s * dIn;
+		faceT.Push (tOut); faceP.Push (pOut);
+		faceT.Push (tIn);  faceP.Push (pIn);
+	}
+	// Sort faces by t (keep points in sync)
+	for (UInt32 i = 0; i < faceT.GetSize (); i++) {
+		for (UInt32 j = i + 1; j < faceT.GetSize (); j++) {
+			if (faceT[j] < faceT[i]) {
+				double t = faceT[i]; faceT[i] = faceT[j]; faceT[j] = t;
+				API_Coord p = faceP[i]; faceP[i] = faceP[j]; faceP[j] = p;
+			}
+		}
+	}
+	// Merge near-duplicates (shared faces)
+	GS::Array<double> pts;
+	GS::Array<API_Coord> wpts;
+	for (UInt32 i = 0; i < faceT.GetSize (); i++) {
+		if (i == 0 || fabs (faceT[i] - pts[pts.GetSize () - 1]) > 1e-4) {
+			pts.Push (faceT[i]);
+			wpts.Push (faceP[i]);
+		}
+	}
+	if (pts.GetSize () < 2) {
+		if (selInfo.marquee.coords != nullptr)
+			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		return NoError;
+	}
+
+	// Dimension line: 1.0 m beyond max face, perpendicular offset along axis
+	const double offset = 1.0;
+	double tMax = pts[pts.GetSize () - 1];
+	API_Coord refC;
+	// Anchor: witness point of last face + axis * offset
+	API_Coord anchor = wpts[wpts.GetSize () - 1];
+	refC.x = anchor.x + mx * offset;
+	refC.y = anchor.y + my * offset;
+	(void) tMax;
+
+	UInt32 createdCount = 0;
+	err = ACAPI_CallUndoableCommand ("Цепочка толщин стен", [&] () -> GSErrCode {
+		API_Element element = {};
+		API_ElementMemo memo = {};
+		element.header.type = API_DimensionID;
+		element.header.floorInd = parWalls[0].header.floorInd;
+		element.header.layer = parWalls[0].header.layer;
+		if (ACAPI_Element_GetDefaults (&element, &memo) != NoError)
+			return APIERR_GENERAL;
+
+		element.dimension.dimAppear = APIApp_Normal;
+		element.dimension.textPos = APIPos_Above;
+		element.dimension.textWay = APIDir_Parallel;
+		element.dimension.defStaticDim = true;
+		element.dimension.usedIn3D = false;
+		element.dimension.horizontalText = false;
+		element.dimension.refC = refC;
+		element.dimension.direction.x = mx;
+		element.dimension.direction.y = my;
+		element.dimension.nDimElem = (Int32) pts.GetSize ();
+
+		memo.dimElems = reinterpret_cast<API_DimElem**> (BMAllocateHandle (element.dimension.nDimElem * sizeof (API_DimElem), ALLOCATE_CLEAR, 0));
+		if (memo.dimElems == nullptr) {
+			ACAPI_DisposeElemMemoHdls (&memo);
+			return APIERR_MEMFULL;
+		}
+
+		for (Int32 i = 0; i < element.dimension.nDimElem; i++) {
+			API_DimElem& de = (*memo.dimElems)[i];
+			de.base.loc = wpts[(UInt32) i];
+			de.note = element.dimension.defNote;
+			de.witnessVal = element.dimension.defWitnessVal;
+			de.witnessForm = element.dimension.defWitnessForm;
+			de.fixedPos = true;
+			// pos must lie on refC+axis line
+			de.pos.x = anchor.x + mx * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
+			de.pos.y = anchor.y + my * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
+		}
+
+		GSErrCode cerr = ACAPI_Element_Create (&element, &memo);
+		ACAPI_DisposeElemMemoHdls (&memo);
+		if (cerr == NoError)
+			createdCount++;
+		return NoError;
+	});
+
+	GS::UniString report;
+	report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_CREATED));
+	AppendNumber (report, createdCount);
+	if (skippedCount > 0) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_SKIPPED));
+		AppendNumber (report, skippedCount);
+	}
+	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+	return NoError;
+}
+
 GSErrCode Do_CalcLineLengths (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_LINE_TITLE);
@@ -2494,6 +2693,7 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		case 9:		return Do_TogglePalette ();
 		case 10:		return Do_About ();
 		case 11:		return Do_DimChainWallOpenings ();
+		case 12:		return Do_WallThicknessChain ();
 		default:	break;
 	}
 	return NoError;

@@ -2,3 +2,17 @@
 *.user
 Build/
 out/
+# ArchiCAD build output
+*.apx
+*.exp
+*.lib
+# Local clutter (not part of ProjectCleaner)
+*.dwg
+*.svg
+*.png
+opencode.json
+.opencode/
+SlabFromHatch/
+index.html
+space-shooter*.html
+whispering*.html

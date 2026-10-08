@@ -6,3 +6,48 @@
 	963593070
 	3226876677
 }
+
+/* Toolbar icons */
+'GICN' 32700 "Scan Delete Views" {
+	"PCViews"
+}
+
+'GICN' 32701 "Scan Delete Library" {
+	"PCLibrary"
+}
+
+'GICN' 32702 "Scan Layers" {
+	"PCLayers"
+}
+
+'GICN' 32703 "Scan Master Layouts" {
+	"PCLayouts"
+}
+
+'GICN' 32704 "Calc Hatch Areas" {
+	"PCArea"
+}
+
+'GICN' 32705 "Calc Line Lengths" {
+	"PCLength"
+}
+
+'GICN' 32706 "Create Zones" {
+	"PCZones"
+}
+
+'GICN' 32707 "Create Slabs" {
+	"PCSlabs"
+}
+
+'GICN' 32708 "Dim Chain Openings" {
+	"PCOpenings"
+}
+
+'GICN' 32709 "Wall Thickness Chain" {
+	"PCWalls"
+}
+
+'GICN' 32710 "About" {
+	"PCAbout"
+}

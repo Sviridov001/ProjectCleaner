@@ -24,17 +24,17 @@ private:
 		BtnAbout			= 11
 	};
 
-	DG::Button		btnScanDeleteViews;
-	DG::Button		btnScanDeleteLibrary;
-	DG::Button		btnScanLayers;
-	DG::Button		btnMasterLayouts;
-	DG::Button		btnHatchArea;
-	DG::Button		btnLineLength;
-	DG::Button		btnCreateZones;
-	DG::Button		btnCreateSlabs;
-	DG::Button		btnDimChain;
-	DG::Button		btnWallChain;
-	DG::Button		btnAbout;
+	DG::IconButton	btnScanDeleteViews;
+	DG::IconButton	btnScanDeleteLibrary;
+	DG::IconButton	btnScanLayers;
+	DG::IconButton	btnMasterLayouts;
+	DG::IconButton	btnHatchArea;
+	DG::IconButton	btnLineLength;
+	DG::IconButton	btnCreateZones;
+	DG::IconButton	btnCreateSlabs;
+	DG::IconButton	btnDimChain;
+	DG::IconButton	btnWallChain;
+	DG::IconButton	btnAbout;
 
 	ProjectCleanerPalette ();
 
@@ -54,5 +54,7 @@ private:
 protected:
 	virtual void	PanelOpened (const DG::PanelOpenEvent& ev) override;
 	virtual void	PanelCloseRequested (const DG::PanelCloseRequestEvent& ev, bool* accepted) override;
+	virtual void	PanelToolTipRequested (const DG::PanelHelpEvent& ev, GS::UniString* toolTipText) override;
+	virtual void	ItemToolTipRequested (const DG::ItemHelpEvent& ev, GS::UniString* toolTipText) override;
 	virtual void	ButtonClicked (const DG::ButtonClickEvent& ev) override;
 };

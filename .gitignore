@@ -9,6 +9,7 @@ out/
 # Local clutter (not part of ProjectCleaner)
 *.dwg
 *.svg
+!ProjectCleaner/RFIX/Images/*.svg
 *.png
 opencode.json
 .opencode/

@@ -106,6 +106,80 @@ void ProjectCleanerPalette::PanelCloseRequested (const DG::PanelCloseRequestEven
 	Hide ();
 }
 
+#define TOOLTIP_RES_ID 32503
+
+void ProjectCleanerPalette::ItemToolTipRequested (const DG::ItemHelpEvent& ev, GS::UniString* toolTipText)
+{
+	if (toolTipText == nullptr)
+		return;
+	DG::Item* item = ev.GetSource ();
+	if (item == nullptr)
+		return;
+
+	Int32 index = 0;
+	if (item == &btnScanDeleteViews)
+		index = 1;
+	else if (item == &btnScanDeleteLibrary)
+		index = 2;
+	else if (item == &btnScanLayers)
+		index = 3;
+	else if (item == &btnMasterLayouts)
+		index = 4;
+	else if (item == &btnHatchArea)
+		index = 5;
+	else if (item == &btnLineLength)
+		index = 6;
+	else if (item == &btnCreateZones)
+		index = 7;
+	else if (item == &btnCreateSlabs)
+		index = 8;
+	else if (item == &btnDimChain)
+		index = 9;
+	else if (item == &btnWallChain)
+		index = 10;
+	else if (item == &btnAbout)
+		index = 11;
+
+	if (index > 0)
+		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
+}
+
+void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev, GS::UniString* toolTipText)
+{
+	if (toolTipText == nullptr)
+		return;
+	const DG::Item* item = ev.GetItem ();
+	if (item == nullptr)
+		return;
+
+	Int32 index = 0;
+	if (item == &btnScanDeleteViews)
+		index = 1;
+	else if (item == &btnScanDeleteLibrary)
+		index = 2;
+	else if (item == &btnScanLayers)
+		index = 3;
+	else if (item == &btnMasterLayouts)
+		index = 4;
+	else if (item == &btnHatchArea)
+		index = 5;
+	else if (item == &btnLineLength)
+		index = 6;
+	else if (item == &btnCreateZones)
+		index = 7;
+	else if (item == &btnCreateSlabs)
+		index = 8;
+	else if (item == &btnDimChain)
+		index = 9;
+	else if (item == &btnWallChain)
+		index = 10;
+	else if (item == &btnAbout)
+		index = 11;
+
+	if (index > 0)
+		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
+}
+
 bool ProjectCleanerPalette::IsFloorPlanActive ()
 {
 	API_WindowInfo windowInfo = {};

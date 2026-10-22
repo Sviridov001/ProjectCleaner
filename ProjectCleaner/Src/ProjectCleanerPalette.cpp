@@ -1,4 +1,5 @@
 #include "ProjectCleanerPalette.hpp"
+#include "ProjectCleanerCompat.hpp"
 
 // Forward declarations from ProjectCleaner.cpp
 extern GSErrCode Do_ScanDeleteUnusedViews (void);
@@ -23,13 +24,13 @@ const GS::Guid& ProjectCleanerPalette::PaletteGuid ()
 	return s_PaletteGuid;
 }
 
-Int32 ProjectCleanerPalette::PaletteRefId ()
+GS::Int32 ProjectCleanerPalette::PaletteRefId ()
 {
-	static Int32 refId (GS::CalculateHashValue (PaletteGuid ()));
+	static GS::Int32 refId (GS::CalculateHashValue (PaletteGuid ()));
 	return refId;
 }
 
-GSErrCode __ACENV_CALL ProjectCleanerPalette::PaletteAPIControlCallBack (Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param)
+GSErrCode __ACENV_CALL ProjectCleanerPalette::PaletteAPIControlCallBack (GS::Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param)
 {
 	GSErrCode err = NoError;
 	if (referenceID == PaletteRefId ()) {
@@ -116,7 +117,7 @@ void ProjectCleanerPalette::ItemToolTipRequested (const DG::ItemHelpEvent& ev, G
 	if (item == nullptr)
 		return;
 
-	Int32 index = 0;
+	short index = 0;
 	if (item == &btnScanDeleteViews)
 		index = 1;
 	else if (item == &btnScanDeleteLibrary)
@@ -152,7 +153,7 @@ void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev,
 	if (item == nullptr)
 		return;
 
-	Int32 index = 0;
+	short index = 0;
 	if (item == &btnScanDeleteViews)
 		index = 1;
 	else if (item == &btnScanDeleteLibrary)
@@ -183,7 +184,7 @@ void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev,
 bool ProjectCleanerPalette::IsFloorPlanActive ()
 {
 	API_WindowInfo windowInfo = {};
-	if (ACAPI_Database (APIDb_GetCurrentWindowID, &windowInfo) != NoError)
+	if (PC_GetCurrentWindow (&windowInfo) != NoError)
 		return false;
 
 	return windowInfo.typeID == APIWind_FloorPlanID;

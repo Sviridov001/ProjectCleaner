@@ -44,9 +44,9 @@ public:
 	void							UpdateButtonStates ();
 
 	static ProjectCleanerPalette&	GetInstance ();
-	static Int32					PaletteRefId ();
+	static GS::Int32					PaletteRefId ();
 	static const GS::Guid&			PaletteGuid ();
-	static GSErrCode __ACENV_CALL	PaletteAPIControlCallBack (Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param);
+	static GSErrCode __ACENV_CALL	PaletteAPIControlCallBack (GS::Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param);
 
 private:
 	bool							IsFloorPlanActive ();

@@ -1,5 +1,5 @@
 // *****************************************************************************
-// Project Cleaner - Add-On for ArchiCAD 26
+// Project Cleaner - Add-On for ArchiCAD 26 / 28
 // Scan and delete unused views in the View Map
 // *****************************************************************************
 
@@ -22,12 +22,24 @@
 #include	"Windows.h"
 
 #include	"ProjectCleanerPalette.hpp"
+#include	"ProjectCleanerCompat.hpp"
 
 // =============================================================================
 // Resource IDs
 // =============================================================================
 
-#define MENU_RES_ID			32500
+#define MENU_RES_CLEANUP	32500	// "Очистка проекта"
+#define MENU_RES_ANALYSIS	32510	// "Анализ выделения"
+#define MENU_RES_CREATE		32520	// "Создание из штриховок"
+#define MENU_RES_DIMS		32530	// "Размеры стен"
+#define MENU_RES_SERVICE	32540	// "Сервис"
+
+#define PROMPT_RES_CLEANUP	32502
+#define PROMPT_RES_ANALYSIS	32511
+#define PROMPT_RES_CREATE	32521
+#define PROMPT_RES_DIMS		32531
+#define PROMPT_RES_SERVICE	32541
+
 #define STR_RES_ADDON_INFO	32000
 #define STR_RES_REPORT		32501
 
@@ -164,7 +176,7 @@ static bool	GetMapRootItem (API_NavigatorMapID mapId, API_NavigatorItem* rootIte
 	set.mapId = mapId;
 
 	Int32 setIndex = 0;
-	if (ACAPI_Navigator (APINavigator_GetNavigatorSetID, &set, &setIndex) != NoError)
+	if (PC_Navigator_GetSet (&set, &setIndex) != NoError)
 		return false;
 
 	BNZeroMemory (rootItem, sizeof (API_NavigatorItem));
@@ -182,7 +194,7 @@ static GSErrCode	CollectNavigatorItems (const API_NavigatorItem& parent, Int32 d
 	GS::Array<API_NavigatorItem> children;
 	API_NavigatorItem parentCopy = parent;
 
-	GSErrCode err = ACAPI_Navigator (APINavigator_GetNavigatorChildrenItemsID, &parentCopy, nullptr, &children);
+	GSErrCode err = PC_Navigator_GetChildren (&parentCopy, &children);
 	if (err != NoError)
 		return err;
 
@@ -273,7 +285,7 @@ static GSErrCode	GetEmbeddedLibraryLocation (IO::Location* embeddedLocation, boo
 	Int32 embeddedIndex = -1;
 	*found = false;
 
-	GSErrCode err = ACAPI_Environment (APIEnv_GetLibrariesID, &libraries, &embeddedIndex);
+	GSErrCode err = PC_GetLibraries (&libraries, &embeddedIndex);
 	if (err != NoError)
 		return err;
 
@@ -315,7 +327,7 @@ static GSErrCode	CollectEmbeddedLibParts (GS::Array<EmbeddedLibPartInfo>* embedd
 		return NoError;
 
 	Int32 libCount = 0;
-	err = ACAPI_LibPart_GetNum (&libCount);
+	err = PC_LibPart_GetNum (&libCount);
 	if (err != NoError)
 		return err;
 
@@ -323,7 +335,7 @@ static GSErrCode	CollectEmbeddedLibParts (GS::Array<EmbeddedLibPartInfo>* embedd
 		API_LibPart libPart;
 		BNZeroMemory (&libPart, sizeof (API_LibPart));
 		libPart.index = i;
-		if (ACAPI_LibPart_Get (&libPart) != NoError)
+		if (PC_LibPart_Get (&libPart) != NoError)
 			continue;
 
 		(*totalParts)++;
@@ -372,7 +384,7 @@ static UInt32	DeleteEmptyLibFoldersRecursive (const IO::Location& folderLoc)
 			bool keepGSM = false;
 			bool silentMode = true;
 			IO::Location subLocCopy = subLoc;
-			if (ACAPI_Environment (APIEnv_DeleteEmbeddedLibItemID, &subLocCopy, (void*)(size_t)keepGSM, (void*)(size_t)silentMode) == NoError)
+			if (PC_DeleteEmbeddedLibItem (&subLocCopy, keepGSM, silentMode) == NoError)
 				deletedCount++;
 		}
 	}
@@ -494,7 +506,7 @@ GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 		locations.Push (loc);
 	}
 
-	err = ACAPI_Environment (APIEnv_DeleteEmbeddedLibItemsID, &locations, (void*)(size_t)keepGSM, (void*)(size_t)silentMode);
+	err = PC_DeleteEmbeddedLibItems (&locations, keepGSM, silentMode);
 
 	// Verification scan
 	UIndex totalPartsAfter = 0;
@@ -609,7 +621,7 @@ GSErrCode Do_ScanDeleteUnusedViews (void)
 	bool silentMode = true;
 	for (const API_NavigatorItem& view : unusedViews) {
 		API_Guid viewGuid = view.guid;
-		GSErrCode delErr = ACAPI_Navigator (APINavigator_DeleteNavigatorViewID, &viewGuid, &silentMode);
+		GSErrCode delErr = PC_Navigator_DeleteView (&viewGuid, &silentMode);
 		if (delErr == NoError)
 			deleted++;
 		else
@@ -796,7 +808,7 @@ static GS::UniString	GetFillName (API_AttributeIndex fillInd)
 			return *attr.filltype.head.uniStringNamePtr;
 		return GS::UniString (attr.filltype.head.name);
 	}
-	return GS::UniString::Printf ("#%d", static_cast<int>(fillInd));
+	return GS::UniString::Printf ("#%d", PC_AttrToInt (fillInd));
 }
 
 GSErrCode Do_CalcHatchAreas (void)
@@ -1591,10 +1603,10 @@ GSErrCode Do_DimChainWallOpenings (void)
 		GS::Array<DimOpenInfo> openInfos;
 		GS::Array<std::pair<double, double>> openings; // for static fallback
 		GS::Array<API_Guid> connGuids;
-		ACAPI_Element_GetConnectedElements (wallGuid, API_WindowID, &connGuids);
+		PC_GetConnectedElements (wallGuid, API_WindowID, &connGuids);
 		{
 			GS::Array<API_Guid> doors;
-			ACAPI_Element_GetConnectedElements (wallGuid, API_DoorID, &doors);
+			PC_GetConnectedElements (wallGuid, API_DoorID, &doors);
 			for (const auto& g : doors) connGuids.Push (g);
 		}
 		for (const API_Guid& og : connGuids) {
@@ -1616,7 +1628,7 @@ GSErrCode Do_DimChainWallOpenings (void)
 		// Generic API_OpeningID elements: position from frame basePoint projected on axis (static only)
 		{
 			GS::Array<API_Guid> genOps;
-			ACAPI_Element_GetConnectedElements (wallGuid, API_OpeningID, &genOps);
+			PC_GetConnectedElements (wallGuid, API_OpeningID, &genOps);
 			for (const API_Guid& og : genOps) {
 				API_Element op = {};
 				op.header.guid = og;
@@ -2021,8 +2033,8 @@ GSErrCode Do_CalcLineLengths (void)
 GSErrCode Do_ScanUnusedLayers (void)
 {
 	// 1. Collect all layers
-	API_AttributeIndex layerCount = 0;
-	GSErrCode err = ACAPI_Attribute_GetNum (API_LayerID, &layerCount);
+	UInt32 layerCount = 0;
+	GSErrCode err = PC_Attribute_GetNum (API_LayerID, &layerCount);
 	if (err != NoError || layerCount == 0) {
 		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
 		return NoError;
@@ -2037,10 +2049,10 @@ GSErrCode Do_ScanUnusedLayers (void)
 
 	GS::Array<LayerInfo> allLayers;
 
-	for (API_AttributeIndex i = 1; i <= layerCount; i++) {
+	for (Int32 i = 1; i <= (Int32) layerCount; i++) {
 		API_Attribute attrib = {};
 		attrib.header.typeID = API_LayerID;
-		attrib.header.index = i;
+		attrib.header.index = PC_AttrIndex (i);
 		GS::UniString uniName;
 		attrib.header.uniStringNamePtr = &uniName;
 
@@ -2051,7 +2063,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 			continue;
 
 		LayerInfo info;
-		info.index = i;
+		info.index = PC_AttrIndex (i);
 		info.name = uniName;
 		info.hidden = (attrib.header.flags & APILay_Hidden) != 0;
 		info.locked = (attrib.header.flags & APILay_Locked) != 0;
@@ -2060,7 +2072,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 
 	// 2. Collect used layer indices from all elements
 	GS::Array<bool> layerUsed;
-	for (UInt32 i = 0; i <= static_cast<UInt32>(layerCount); i++)
+	for (UInt32 i = 0; i <= layerCount; i++)
 		layerUsed.Push (false);
 
 	const API_ElemTypeID types[] = {
@@ -2088,7 +2100,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 			element.header.guid = guid;
 			err = ACAPI_Element_Get (&element);
 			if (err == NoError) {
-				GS::UInt32 li = static_cast<GS::UInt32>(element.header.layer);
+				GS::UInt32 li = (GS::UInt32) PC_AttrToInt (element.header.layer);
 				if (li > 0 && li < layerUsed.GetSize ()) {
 					layerUsed[li] = true;
 					usedCount++;
@@ -2101,9 +2113,9 @@ GSErrCode Do_ScanUnusedLayers (void)
 	GS::Array<LayerInfo> unusedLayers;
 
 	for (UInt32 i = 0; i < allLayers.GetSize (); i++) {
-		if (allLayers[i].index == 1)
+		if (allLayers[i].index == PC_AttrIndex (1))
 			continue;
-		GS::UInt32 li = static_cast<GS::UInt32>(allLayers[i].index);
+		GS::UInt32 li = (GS::UInt32) PC_AttrToInt (allLayers[i].index);
 		if (li >= layerUsed.GetSize () || !layerUsed[li])
 			unusedLayers.Push (allLayers[i]);
 	}
@@ -2207,7 +2219,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 {
 	// 1. Get all master layouts
 	GS::Array<API_DatabaseUnId> masterLayouts;
-	GSErrCode err = ACAPI_Database (APIDb_GetMasterLayoutDatabasesID, nullptr, &masterLayouts);
+	GSErrCode err = PC_GetMasterLayoutDatabases (&masterLayouts);
 	if (err != NoError || masterLayouts.IsEmpty ()) {
 		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_NONE)), true);
 		return NoError;
@@ -2222,7 +2234,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 	for (const auto& mId : masterLayouts) {
 		API_DatabaseInfo dbInfo = {};
 		dbInfo.databaseUnId = mId;
-		err = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+		err = PC_GetDatabaseInfo (&dbInfo);
 		if (err == NoError) {
 			MasterLayoutInfo info;
 			info.dbId = mId;
@@ -2233,7 +2245,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 
 	// 2. Get all regular layouts and find which master each uses
 	GS::Array<API_DatabaseUnId> layouts;
-	err = ACAPI_Database (APIDb_GetLayoutDatabasesID, nullptr, &layouts);
+	err = PC_GetLayoutDatabases (&layouts);
 	if (err != NoError)
 		layouts.Clear ();
 
@@ -2244,7 +2256,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 	for (const auto& layoutId : layouts) {
 		API_DatabaseInfo dbInfo = {};
 		dbInfo.databaseUnId = layoutId;
-		err = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+		err = PC_GetDatabaseInfo (&dbInfo);
 		if (err != NoError)
 			continue;
 
@@ -2336,25 +2348,25 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 			// Fetch DB and LayoutInfo BEFORE modify (keep original UnId)
 			API_DatabaseInfo dbInfo = {};
 			dbInfo.databaseUnId = unusedMasters[i].dbId;
-			GSErrCode errDbGet = ACAPI_Database (APIDb_GetDatabaseInfoID, &dbInfo);
+			GSErrCode errDbGet = PC_GetDatabaseInfo (&dbInfo);
 			if (errDbGet != NoError) { failCount++; details.Append (GS::UniString::Printf ("\n%T: GetDB %d", oldName.ToPrintf (), (int) errDbGet)); continue; }
 
 			API_LayoutInfo layoutInfo = {};
-			GSErrCode errLayGet = ACAPI_Environment (APIEnv_GetLayoutSetsID, &layoutInfo, &dbInfo.databaseUnId);
+			GSErrCode errLayGet = PC_GetLayoutSets (&layoutInfo, &dbInfo.databaseUnId);
 			bool hasLayout = (errLayGet == NoError);
 
 			// 6a. Update LayoutInfo.layoutName first (uchar_t)
 			GSErrCode errLayChg = -1;
 			if (hasLayout) {
 				GS::ucscpy (layoutInfo.layoutName, newName.ToUStr ());
-				errLayChg = ACAPI_Environment (APIEnv_ChangeLayoutSetsID, &layoutInfo, &dbInfo.databaseUnId);
+				errLayChg = PC_ChangeLayoutSets (&layoutInfo, &dbInfo.databaseUnId);
 				// keep customData cleanup after Change
 				if (layoutInfo.customData != nullptr) { delete layoutInfo.customData; layoutInfo.customData = nullptr; }
 			}
 
 			// 6b. Update Database name (char)
 			GS::snuprintf (dbInfo.name, sizeof (dbInfo.name), "%s", newName.ToCStr ().Get ());
-			GSErrCode errDbChg = ACAPI_Database (APIDb_ModifyDatabaseID, &dbInfo);
+			GSErrCode errDbChg = PC_ModifyDatabase (&dbInfo);
 
 			// 6c. Update Navigator uName (uchar_t) — this is what Book shows and what restores on click
 			GSErrCode errNavGet = -1, errNavChg = -1;
@@ -2362,7 +2374,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 			{
 				API_NavigatorSet navSet = {};
 				navSet.mapId = API_LayoutMap;
-				if (ACAPI_Navigator (APINavigator_GetNavigatorSetID, &navSet, nullptr) == NoError) {
+				if (PC_Navigator_GetSet (&navSet, nullptr) == NoError) {
 					GS::Array<API_Guid> stack;
 					stack.Push (navSet.rootGuid);
 					while (!stack.IsEmpty () && !navFound) {
@@ -2371,7 +2383,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 						curItem.guid = curGuid;
 						curItem.mapId = API_LayoutMap;
 						GS::Array<API_NavigatorItem> children;
-						if (ACAPI_Navigator (APINavigator_GetNavigatorChildrenItemsID, &curItem, nullptr, &children) != NoError) continue;
+						if (PC_Navigator_GetChildren (&curItem, &children) != NoError) continue;
 						for (const auto& child : children) {
 							bool guidMatch = (child.db.databaseUnId.elemSetId == unusedMasters[i].dbId.elemSetId);
 							bool nameMatch = (GS::UniString (child.uName) == oldName);
@@ -2379,11 +2391,11 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 								API_NavigatorItem navItem = {};
 								navItem.guid = child.guid;
 								navItem.mapId = API_LayoutMap;
-								errNavGet = ACAPI_Navigator (APINavigator_GetNavigatorItemID, &navItem.guid, &navItem);
+								errNavGet = PC_Navigator_GetItem (&navItem.guid, &navItem);
 								if (errNavGet == NoError) {
 									GS::ucscpy (navItem.uName, newName.ToUStr ());
 									navItem.customName = true;
-									errNavChg = ACAPI_Navigator (APINavigator_ChangeNavigatorItemID, &navItem, nullptr);
+									errNavChg = PC_Navigator_ChangeItem (&navItem);
 									navFound = (errNavChg == NoError);
 								}
 								break;
@@ -2433,8 +2445,8 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 GSErrCode Do_DeleteUnusedLayers (void)
 {
 	// Re-scan to get unused layer indices
-	API_AttributeIndex layerCount = 0;
-	GSErrCode err = ACAPI_Attribute_GetNum (API_LayerID, &layerCount);
+	UInt32 layerCount = 0;
+	GSErrCode err = PC_Attribute_GetNum (API_LayerID, &layerCount);
 	if (err != NoError || layerCount == 0) {
 		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
 		return NoError;
@@ -2447,10 +2459,10 @@ GSErrCode Do_DeleteUnusedLayers (void)
 
 	GS::Array<LayerEntry> allLayers;
 
-	for (API_AttributeIndex i = 1; i <= layerCount; i++) {
+	for (Int32 i = 1; i <= (Int32) layerCount; i++) {
 		API_Attribute attrib = {};
 		attrib.header.typeID = API_LayerID;
-		attrib.header.index = i;
+		attrib.header.index = PC_AttrIndex (i);
 		GS::UniString uniName;
 		attrib.header.uniStringNamePtr = &uniName;
 
@@ -2461,14 +2473,14 @@ GSErrCode Do_DeleteUnusedLayers (void)
 			continue;
 
 		LayerEntry entry;
-		entry.index = i;
+		entry.index = PC_AttrIndex (i);
 		entry.name = uniName;
 		allLayers.Push (entry);
 	}
 
 	// Collect used layers
 	GS::Array<bool> layerUsed;
-	for (UInt32 i = 0; i <= static_cast<UInt32>(layerCount); i++)
+	for (UInt32 i = 0; i <= layerCount; i++)
 		layerUsed.Push (false);
 
 	const API_ElemTypeID types[] = {
@@ -2491,7 +2503,7 @@ GSErrCode Do_DeleteUnusedLayers (void)
 			API_Element element = {};
 			element.header.guid = guid;
 			if (ACAPI_Element_Get (&element) == NoError) {
-				GS::UInt32 li = static_cast<GS::UInt32>(element.header.layer);
+				GS::UInt32 li = (GS::UInt32) PC_AttrToInt (element.header.layer);
 				if (li > 0 && li < layerUsed.GetSize ())
 					layerUsed[li] = true;
 			}
@@ -2501,9 +2513,9 @@ GSErrCode Do_DeleteUnusedLayers (void)
 	// Find unused (skip index 1 = "ArchiCAD Layer")
 	GS::Array<LayerEntry> unusedLayers;
 	for (UInt32 i = 0; i < allLayers.GetSize (); i++) {
-		if (allLayers[i].index == 1)
+		if (allLayers[i].index == PC_AttrIndex (1))
 			continue;
-		GS::UInt32 li = static_cast<GS::UInt32>(allLayers[i].index);
+		GS::UInt32 li = (GS::UInt32) PC_AttrToInt (allLayers[i].index);
 		if (li >= layerUsed.GetSize () || !layerUsed[li])
 			unusedLayers.Push (allLayers[i]);
 	}
@@ -2641,8 +2653,8 @@ GSErrCode Do_ProjectStats (void)
 	}
 
 	// Layer count
-	API_AttributeIndex layerCount = 0;
-	if (ACAPI_Attribute_GetNum (API_LayerID, &layerCount) == NoError) {
+	UInt32 layerCount = 0;
+	if (PC_Attribute_GetNum (API_LayerID, &layerCount) == NoError) {
 		report.Append ("\n\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_STAT_LAYERS));
 		AppendNumber (report, layerCount);
@@ -2681,21 +2693,43 @@ GSErrCode Do_TogglePalette (void)
 
 GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 {
-	switch (menuParams->menuItemRef.itemIndex) {
-		case 1:		return Do_ScanDeleteUnusedViews ();
-		case 2:		return Do_ScanDeleteEmbeddedLibrary ();
-		case 3:		return Do_ScanUnusedLayers ();
-		case 4:		return Do_ScanUnusedMasterLayouts ();
-		case 5:		return Do_CalcHatchAreas ();
-		case 6:		return Do_CalcLineLengths ();
-		case 7:		return Do_CreateZonesFromHatches ();
-		case 8:		return Do_CreateSlabsFromHatches ();
-		case 9:		return Do_TogglePalette ();
-		case 10:		return Do_About ();
-		case 11:		return Do_DimChainWallOpenings ();
-		case 12:		return Do_WallThicknessChain ();
-		default:	break;
+	const short menuResID = menuParams->menuItemRef.menuResID;
+	const Int32 itemIndex = menuParams->menuItemRef.itemIndex;
+
+	if (menuResID == MENU_RES_CLEANUP) {
+		switch (itemIndex) {
+			case 1:		return Do_ScanDeleteUnusedViews ();
+			case 2:		return Do_ScanDeleteEmbeddedLibrary ();
+			case 3:		return Do_ScanUnusedLayers ();
+			case 4:		return Do_ScanUnusedMasterLayouts ();
+			default:	break;
+		}
+	} else if (menuResID == MENU_RES_ANALYSIS) {
+		switch (itemIndex) {
+			case 1:		return Do_CalcHatchAreas ();
+			case 2:		return Do_CalcLineLengths ();
+			default:	break;
+		}
+	} else if (menuResID == MENU_RES_CREATE) {
+		switch (itemIndex) {
+			case 1:		return Do_CreateZonesFromHatches ();
+			case 2:		return Do_CreateSlabsFromHatches ();
+			default:	break;
+		}
+	} else if (menuResID == MENU_RES_DIMS) {
+		switch (itemIndex) {
+			case 1:		return Do_DimChainWallOpenings ();
+			case 2:		return Do_WallThicknessChain ();
+			default:	break;
+		}
+	} else if (menuResID == MENU_RES_SERVICE) {
+		switch (itemIndex) {
+			case 1:		return Do_TogglePalette ();
+			case 2:		return Do_About ();
+			default:	break;
+		}
 	}
+
 	return NoError;
 }
 
@@ -2712,7 +2746,23 @@ API_AddonType __ACENV_CALL	CheckEnvironment (API_EnvirParams* envir)
 
 GSErrCode __ACENV_CALL	RegisterInterface (void)
 {
-	return ACAPI_Register_Menu (MENU_RES_ID, 32502, MenuCode_UserDef, MenuFlag_SeparatorBefore);
+	GSErrCode err = PC_RegisterMenu (MENU_RES_CLEANUP, PROMPT_RES_CLEANUP, MenuCode_UserDef, MenuFlag_SeparatorBefore);
+	if (err != NoError)
+		return err;
+
+	err = PC_RegisterMenu (MENU_RES_ANALYSIS, PROMPT_RES_ANALYSIS, MenuCode_UserDef, MenuFlag_Default);
+	if (err != NoError)
+		return err;
+
+	err = PC_RegisterMenu (MENU_RES_CREATE, PROMPT_RES_CREATE, MenuCode_UserDef, MenuFlag_Default);
+	if (err != NoError)
+		return err;
+
+	err = PC_RegisterMenu (MENU_RES_DIMS, PROMPT_RES_DIMS, MenuCode_UserDef, MenuFlag_Default);
+	if (err != NoError)
+		return err;
+
+	return PC_RegisterMenu (MENU_RES_SERVICE, PROMPT_RES_SERVICE, MenuCode_UserDef, MenuFlag_Default);
 }
 
 GSErrCode __ACENV_CALL	ProjectEventHandler (API_NotifyEventID notifID, Int32 /*param*/)
@@ -2725,7 +2775,15 @@ GSErrCode __ACENV_CALL	ProjectEventHandler (API_NotifyEventID notifID, Int32 /*p
 
 GSErrCode __ACENV_CALL	Initialize (void)
 {
-	GSErrCode err = ACAPI_Install_MenuHandler (MENU_RES_ID, MenuHandler);
+	GSErrCode err = PC_InstallMenuHandler (MENU_RES_CLEANUP, MenuHandler);
+	if (err == NoError)
+		err = PC_InstallMenuHandler (MENU_RES_ANALYSIS, MenuHandler);
+	if (err == NoError)
+		err = PC_InstallMenuHandler (MENU_RES_CREATE, MenuHandler);
+	if (err == NoError)
+		err = PC_InstallMenuHandler (MENU_RES_DIMS, MenuHandler);
+	if (err == NoError)
+		err = PC_InstallMenuHandler (MENU_RES_SERVICE, MenuHandler);
 
 	ACAPI_RegisterModelessWindow (ProjectCleanerPalette::PaletteRefId (),
 								  ProjectCleanerPalette::PaletteAPIControlCallBack,
@@ -2734,14 +2792,14 @@ GSErrCode __ACENV_CALL	Initialize (void)
 								  API_PalEnabled_Detail + API_PalEnabled_Worksheet + API_PalEnabled_Layout +
 								  API_PalEnabled_DocumentFrom3D, GSGuid2APIGuid (ProjectCleanerPalette::PaletteGuid ()));
 
-	ACAPI_Notify_CatchProjectEvent (APINotify_ChangeWindow, ProjectEventHandler);
+	PC_CatchProjectEvent (APINotify_ChangeWindow, ProjectEventHandler);
 
 	return err;
 }
 
 GSErrCode __ACENV_CALL	FreeData (void)
 {
-	ACAPI_Notify_CatchProjectEvent (APINotify_ChangeWindow, nullptr);
+	PC_CatchProjectEvent (APINotify_ChangeWindow, nullptr);
 	ACAPI_UnregisterModelessWindow (ProjectCleanerPalette::PaletteRefId ());
 	return NoError;
 }

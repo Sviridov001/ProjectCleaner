@@ -1,7 +1,11 @@
 cmake_minimum_required (VERSION 3.16)
 
 function (SetCompilerOptions target)
-	target_compile_features (${target} PUBLIC cxx_std_14)
+	if (ARCHICAD_VERSION GREATER_EQUAL 28)
+		target_compile_features (${target} PUBLIC cxx_std_17)
+	else ()
+		target_compile_features (${target} PUBLIC cxx_std_14)
+	endif ()
 	target_compile_options (${target} PUBLIC "$<$<CONFIG:Debug>:-DDEBUG>")
 	if (WIN32)
 		target_compile_options (${target} PUBLIC /W3 /WX /wd4996 /Zc:wchar_t-)
@@ -197,10 +201,16 @@ target_include_directories (AddOn PUBLIC
 )
 
 if (WIN32)
+	# DevKit 26 keeps the Win libs in Support/Lib/Win, DevKit 27+ in Support/Lib
+	if (EXISTS "${AC_API_DEVKIT_DIR}/Support/Lib/Win/ACAP_STAT.lib")
+		set (ACAP_STAT_DIR "${AC_API_DEVKIT_DIR}/Support/Lib/Win")
+	else ()
+		set (ACAP_STAT_DIR "${AC_API_DEVKIT_DIR}/Support/Lib")
+	endif ()
 	target_link_libraries (AddOn
-		"$<$<CONFIG:Debug>:${AC_API_DEVKIT_DIR}/Support/Lib/Win/ACAP_STATD.lib>"
-		"$<$<CONFIG:Release>:${AC_API_DEVKIT_DIR}/Support/Lib/Win/ACAP_STAT.lib>"
-		"$<$<CONFIG:RelWithDebInfo>:${AC_API_DEVKIT_DIR}/Support/Lib/Win/ACAP_STAT.lib>"
+		"$<$<CONFIG:Debug>:${ACAP_STAT_DIR}/ACAP_STATD.lib>"
+		"$<$<CONFIG:Release>:${ACAP_STAT_DIR}/ACAP_STAT.lib>"
+		"$<$<CONFIG:RelWithDebInfo>:${ACAP_STAT_DIR}/ACAP_STAT.lib>"
 	)
 else ()
 	find_library (CocoaFramework Cocoa)

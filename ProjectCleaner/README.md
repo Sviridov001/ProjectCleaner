@@ -53,9 +53,9 @@
 - APIDevKit 26, CMake 4.3.1, VS 18 (v145 — снят лимит `_MSC_VER` в `Definitions.hpp:185`)
 - Генератор: `Visual Studio 18 2026` x64
 - `cmake -S ProjectCleaner -B build -G "Visual Studio 18 2026" -A x64 && cmake --build build --config Release --target AddOn`
-- Выход: `build/Release/ProjectCleaner.apx` → **ArchiCAD должен быть закрыт** (иначе LNK1104)
+- Выход: `build/Release/ProjectCleaner_AC26.apx` → **ArchiCAD должен быть закрыт** (иначе LNK1104)
 - ArchiCAD 28: `cmake -S ProjectCleaner -B build28 -G "Visual Studio 18 2026" -A x64 -DAC_API_DEVKIT_DIR=C:/Dev/APIDevKit-28 && cmake --build build28 --config Release --target AddOn`
-  результат: `build28/Release/ProjectCleaner.apx` (при релизе переименовывается в `ProjectCleaner_AC28.apx`)
+  результат: `build28/Release/ProjectCleaner_AC28.apx` (имя файла формируется автоматически: `<имя>_AC<версия ArchiCAD>.apx`)
 
 ## История версий
 

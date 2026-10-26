@@ -1807,7 +1807,7 @@ GSErrCode Do_WallThicknessChain (void)
 	}
 
 	// Dimension line: 1.0 m beyond max face, perpendicular offset along axis
-	const double offset = 1.0;
+	const double offset = 1000.0;
 	double tMax = pts[pts.GetSize () - 1];
 	API_Coord refC;
 	// Anchor: witness point of the last face
@@ -1815,7 +1815,7 @@ GSErrCode Do_WallThicknessChain (void)
 
 	// Ask the user where to place the dimension line
 	API_Coord clickPos = {};
-	GSErrCode perr = PC_GetPoint ("Укажите положение линии размера", &clickPos);
+	GSErrCode perr = PC_GetPoint ("Укажите положение линии размера", &clickPos, parWalls[0].header.floorInd);
 	if (perr == NoError) {
 		// Shift the dimension line parallel to itself so that it passes through the clicked point
 		double delta = (clickPos.x - anchor.x) * rdx + (clickPos.y - anchor.y) * rdy;

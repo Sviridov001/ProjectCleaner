@@ -124,14 +124,12 @@ inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID t
 	return ACAPI_Grouping_GetConnectedElements (guid, API_ElemType (typeID), connectedElements);
 }
 
-inline GSErrCode	PC_GetPoint (const char* prompt, API_Coord* outPos)
+inline GSErrCode	PC_GetPoint (const char* prompt, API_Coord* outPos, short /*floorInd*/)
 {
 	API_GetPointType gp = {};
 	BNZeroMemory (&gp, sizeof (gp));
 	strncpy (gp.prompt, prompt, sizeof (gp.prompt) - 1);
-	gp.changePlane = true;
-	gp.planeCoord = { 0.0, 0.0, 0.0 };
-	gp.planeNormal = { 0.0, 0.0, 1.0 };
+	// Не задаём changePlane — пусть AC28 использует плоскость активного вида (план этажа)
 
 	API_Coord3D pos = {};
 	GSErrCode err = ACAPI_UserInput_GetPoint (&gp, nullptr, nullptr);
@@ -149,10 +147,16 @@ inline void	PC_SelectElement (const API_Guid& guid)
 {
 	API_Neig neig = {};
 	BNZeroMemory (&neig, sizeof (neig));
-	if (ACAPI_Selection_SetSelectedElementNeig (&guid, &neig) == NoError) {
-		GS::Array<API_Neig> sel;
-		sel.Push (neig);
-		ACAPI_Selection_Select (sel, false);
+	neig.guid = guid;
+	// neigID и inIndex не обязательны для выделения по GUID
+	GSErrCode err = ACAPI_Selection_Select (GS::Array<API_Neig> { neig }, false);
+	// Если не вышло — пробуем через SetSelectedElementNeig
+	if (err != NoError) {
+		err = ACAPI_Selection_SetSelectedElementNeig (&guid, &neig);
+		if (err == NoError) {
+			GS::Array<API_Neig> sel; sel.Push (neig);
+			ACAPI_Selection_Select (sel, false);
+		}
 	}
 }
 
@@ -274,7 +278,7 @@ inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID t
 	return ACAPI_Element_GetConnectedElements (guid, typeID, connectedElements);
 }
 
-inline GSErrCode	PC_GetPoint (const char* /*prompt*/, API_Coord* /*outPos*/)
+inline GSErrCode	PC_GetPoint (const char* /*prompt*/, API_Coord* /*outPos*/, short /*floorInd*/)
 {
 	return APIERR_GENERAL;
 }

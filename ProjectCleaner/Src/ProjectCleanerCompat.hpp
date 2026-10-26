@@ -1,7 +1,12 @@
 #ifndef PROJECTCLEANER_COMPAT_HPP
 #define PROJECTCLEANER_COMPAT_HPP
 
-#include "ACAPinc.h"
+#include	"ACAPinc.h"
+#if defined (ServerMainVers_2800)
+#include	"ACAPI_Interface.h"
+#include	"ACAPI_Goodies.h"
+#endif
+#include	<cstring>
 
 // Compatibility layer between ArchiCAD 26 (deprecated dispatchers, implicit
 // attribute index conversions) and ArchiCAD 27+ (typed API functions,
@@ -117,6 +122,38 @@ inline GSErrCode	PC_LibPart_GetNum (Int32* count)
 inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID typeID, GS::Array<API_Guid>* connectedElements)
 {
 	return ACAPI_Grouping_GetConnectedElements (guid, API_ElemType (typeID), connectedElements);
+}
+
+inline GSErrCode	PC_GetPoint (const char* prompt, API_Coord* outPos)
+{
+	API_GetPointType gp = {};
+	BNZeroMemory (&gp, sizeof (gp));
+	strncpy (gp.prompt, prompt, sizeof (gp.prompt) - 1);
+	gp.changePlane = true;
+	gp.planeCoord = { 0.0, 0.0, 0.0 };
+	gp.planeNormal = { 0.0, 0.0, 1.0 };
+
+	API_Coord3D pos = {};
+	GSErrCode err = ACAPI_UserInput_GetPoint (&gp, nullptr, nullptr);
+	if (err == NoError)
+		*outPos = API_Coord { pos.x, pos.y };
+	return err;
+}
+
+inline void	PC_DeselectAll (void)
+{
+	ACAPI_Selection_DeselectAll ();
+}
+
+inline void	PC_SelectElement (const API_Guid& guid)
+{
+	API_Neig neig = {};
+	BNZeroMemory (&neig, sizeof (neig));
+	if (ACAPI_Selection_SetSelectedElementNeig (&guid, &neig) == NoError) {
+		GS::Array<API_Neig> sel;
+		sel.Push (neig);
+		ACAPI_Selection_Select (sel, false);
+	}
 }
 
 inline GSErrCode	PC_RegisterMenu (short menuStrResID, short promptStrResID, APIMenuCodeID menuPosCode, GSFlags menuFlags)
@@ -235,6 +272,19 @@ inline GSErrCode	PC_LibPart_GetNum (Int32* count)
 inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID typeID, GS::Array<API_Guid>* connectedElements)
 {
 	return ACAPI_Element_GetConnectedElements (guid, typeID, connectedElements);
+}
+
+inline GSErrCode	PC_GetPoint (const char* /*prompt*/, API_Coord* /*outPos*/)
+{
+	return APIERR_GENERAL;
+}
+
+inline void	PC_DeselectAll (void)
+{
+}
+
+inline void	PC_SelectElement (const API_Guid& /*guid*/)
+{
 }
 
 inline GSErrCode	PC_RegisterMenu (short menuStrResID, short promptStrResID, APIMenuCodeID menuPosCode, GSFlags menuFlags)

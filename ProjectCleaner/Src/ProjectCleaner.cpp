@@ -1810,13 +1810,35 @@ GSErrCode Do_WallThicknessChain (void)
 	const double offset = 1.0;
 	double tMax = pts[pts.GetSize () - 1];
 	API_Coord refC;
-	// Anchor: witness point of last face + axis * offset
+	// Anchor: witness point of the last face
 	API_Coord anchor = wpts[wpts.GetSize () - 1];
+
+	// Ask the user where to place the dimension line
+	API_Coord clickPos = {};
+	GSErrCode perr = PC_GetPoint ("Укажите положение линии размера", &clickPos);
+	if (perr == NoError) {
+		// Shift the dimension line parallel to itself so that it passes through the clicked point
+		double delta = (clickPos.x - anchor.x) * rdx + (clickPos.y - anchor.y) * rdy;
+		anchor.x += delta * rdx;
+		anchor.y += delta * rdy;
+	} else {
+		// Fixed fallback (Esc or ArchiCAD 26): average center of the selected walls
+		API_Coord avg = { 0.0, 0.0 };
+		for (const auto& w : parWalls) {
+			avg.x += (w.wall.begC.x + w.wall.endC.x) * 0.5;
+			avg.y += (w.wall.begC.y + w.wall.endC.y) * 0.5;
+		}
+		avg.x /= static_cast<double> (parWalls.GetSize ());
+		avg.y /= static_cast<double> (parWalls.GetSize ());
+		anchor = avg;
+	}
+
 	refC.x = anchor.x + mx * offset;
 	refC.y = anchor.y + my * offset;
 	(void) tMax;
 
 	UInt32 createdCount = 0;
+	API_Guid createdGuid = APINULLGuid;
 	err = ACAPI_CallUndoableCommand ("Цепочка толщин стен", [&] () -> GSErrCode {
 		API_Element element = {};
 		API_ElementMemo memo = {};
@@ -1857,10 +1879,16 @@ GSErrCode Do_WallThicknessChain (void)
 
 		GSErrCode cerr = ACAPI_Element_Create (&element, &memo);
 		ACAPI_DisposeElemMemoHdls (&memo);
-		if (cerr == NoError)
+		if (cerr == NoError) {
+			createdGuid = element.header.guid;
 			createdCount++;
+		}
 		return NoError;
 	});
+
+	PC_DeselectAll ();
+	if (createdCount > 0)
+		PC_SelectElement (createdGuid);
 
 	GS::UniString report;
 	report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_CREATED));

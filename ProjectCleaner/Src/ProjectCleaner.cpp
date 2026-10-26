@@ -1761,8 +1761,13 @@ GSErrCode Do_WallThicknessChain (void)
 	// Dimension axis = perpendicular to walls; use normal of first wall
 	double mx = -rdy, my = rdx;
 	// Faces of each wall projected on axis
-	GS::Array<double> faceT;
-	GS::Array<API_Coord> faceP; // witness point (use beg end of each face)
+	struct FaceInfo {
+		double t;
+		API_Coord coord;
+		API_Guid wallGuid;
+		char faceSpecial; // 0 = WallOn (reference line side), 1 = WallPlOn (opposite)
+	};
+	GS::Array<FaceInfo> faceInfos;
 	for (const auto& w : parWalls) {
 		double dx = w.wall.endC.x - w.wall.begC.x;
 		double dy = w.wall.endC.y - w.wall.begC.y;
@@ -1778,25 +1783,29 @@ GSErrCode Do_WallThicknessChain (void)
 		API_Coord pOut, pIn;
 		pOut.x = w.wall.begC.x + nx * s * dOut; pOut.y = w.wall.begC.y + ny * s * dOut;
 		pIn.x  = w.wall.begC.x - nx * s * dIn;  pIn.y  = w.wall.begC.y - ny * s * dIn;
-		faceT.Push (tOut); faceP.Push (pOut);
-		faceT.Push (tIn);  faceP.Push (pIn);
+		// Determine which face is WallOn (reference line side)
+		// Heuristic: reference line is associated with the face it's closer to
+		bool wallOnIsOut = (w.wall.offsetFromOutside <= w.wall.thickness / 2.0);
+		faceInfos.Push ({ tOut, pOut, w.header.guid, wallOnIsOut ? 0 : 1 });
+		faceInfos.Push ({ tIn, pIn, w.header.guid, wallOnIsOut ? 1 : 0 });
 	}
 	// Sort faces by t (keep points in sync)
-	for (UInt32 i = 0; i < faceT.GetSize (); i++) {
-		for (UInt32 j = i + 1; j < faceT.GetSize (); j++) {
-			if (faceT[j] < faceT[i]) {
-				double t = faceT[i]; faceT[i] = faceT[j]; faceT[j] = t;
-				API_Coord p = faceP[i]; faceP[i] = faceP[j]; faceP[j] = p;
+	for (UInt32 i = 0; i < faceInfos.GetSize (); i++) {
+		for (UInt32 j = i + 1; j < faceInfos.GetSize (); j++) {
+			if (faceInfos[j].t < faceInfos[i].t) {
+				FaceInfo tmp = faceInfos[i]; faceInfos[i] = faceInfos[j]; faceInfos[j] = tmp;
 			}
 		}
 	}
-	// Merge near-duplicates (shared faces)
+	// Merge near-duplicates (shared faces) - only if same wall and face type
 	GS::Array<double> pts;
 	GS::Array<API_Coord> wpts;
-	for (UInt32 i = 0; i < faceT.GetSize (); i++) {
-		if (i == 0 || fabs (faceT[i] - pts[pts.GetSize () - 1]) > 1e-4) {
-			pts.Push (faceT[i]);
-			wpts.Push (faceP[i]);
+	GS::Array<FaceInfo> faceInfosMerged;
+	for (UInt32 i = 0; i < faceInfos.GetSize (); i++) {
+		if (i == 0 || fabs (faceInfos[i].t - faceInfosMerged[faceInfosMerged.GetSize () - 1].t) > 1e-4) {
+			pts.Push (faceInfos[i].t);
+			wpts.Push (faceInfos[i].coord);
+			faceInfosMerged.Push (faceInfos[i]);
 		}
 	}
 	if (pts.GetSize () < 2) {
@@ -1837,9 +1846,9 @@ GSErrCode Do_WallThicknessChain (void)
 	refC.y = anchor.y + my * offset;
 	(void) tMax;
 
-	UInt32 createdCount = 0;
+UInt32 createdCount = 0;
 	API_Guid createdGuid = APINULLGuid;
-	err = ACAPI_CallUndoableCommand ("Цепочка толщин стен", [&] () -> GSErrCode {
+	err = ACAPI_CallUndoableCommand ("������?�ؐ�� �'�?�>�%��? �?�'��?", [&] () -> GSErrCode {
 		API_Element element = {};
 		API_ElementMemo memo = {};
 		element.header.type = API_DimensionID;
@@ -1851,13 +1860,13 @@ GSErrCode Do_WallThicknessChain (void)
 		element.dimension.dimAppear = APIApp_Normal;
 		element.dimension.textPos = APIPos_Above;
 		element.dimension.textWay = APIDir_Parallel;
-		element.dimension.defStaticDim = true;
+		element.dimension.defStaticDim = false; // associative
 		element.dimension.usedIn3D = false;
 		element.dimension.horizontalText = false;
 		element.dimension.refC = refC;
 		element.dimension.direction.x = mx;
 		element.dimension.direction.y = my;
-		element.dimension.nDimElem = (Int32) pts.GetSize ();
+		element.dimension.nDimElem = (Int32) faceInfosMerged.GetSize ();
 
 		memo.dimElems = reinterpret_cast<API_DimElem**> (BMAllocateHandle (element.dimension.nDimElem * sizeof (API_DimElem), ALLOCATE_CLEAR, 0));
 		if (memo.dimElems == nullptr) {
@@ -1866,13 +1875,24 @@ GSErrCode Do_WallThicknessChain (void)
 		}
 
 		for (Int32 i = 0; i < element.dimension.nDimElem; i++) {
+			const FaceInfo& fi = faceInfosMerged[(UInt32) i];
 			API_DimElem& de = (*memo.dimElems)[i];
-			de.base.loc = wpts[(UInt32) i];
+			de.base.loc = fi.coord;
 			de.note = element.dimension.defNote;
 			de.witnessVal = element.dimension.defWitnessVal;
 			de.witnessForm = element.dimension.defWitnessForm;
-			de.fixedPos = true;
-			// pos must lie on refC+axis line
+			de.fixedPos = false; // associative
+
+			// Associative base: reference wall face neig
+			de.base.base.type = API_WallID;
+			de.base.base.guid = fi.wallGuid;
+			de.base.base.line = true; // WallOn/WallPlOn are line neigs
+			de.base.base.special = fi.faceSpecial; // 0 = WallOn, 1 = WallPlOn
+			de.base.base.inIndex = 0;
+			de.base.base.guid = fi.wallGuid;
+			de.base.loc = wpts[(UInt32) i]; // fallback coordinate
+
+			de.fixedPos = false; // position follows the element
 			de.pos.x = anchor.x + mx * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
 			de.pos.y = anchor.y + my * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
 		}

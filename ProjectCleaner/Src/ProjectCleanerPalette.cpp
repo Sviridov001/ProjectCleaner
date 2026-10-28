@@ -1,5 +1,6 @@
 #include "ProjectCleanerPalette.hpp"
 #include "ProjectCleanerCompat.hpp"
+#include "DGApplication.hpp"
 
 // Forward declarations from ProjectCleaner.cpp
 extern GSErrCode Do_ScanDeleteUnusedViews (void);
@@ -15,6 +16,15 @@ extern GSErrCode Do_WallThicknessChain (void);
 extern GSErrCode Do_About (void);
 
 #define PAL_RES_ID 32600
+
+// Icon button geometry: 32x32 buttons with 2 px gaps (matches the GDLG resource)
+static const short kBtnCount = 11;
+static const short kBtnStep  = 34;
+static const short kHorizWidth  = 420;
+static const short kHorizHeight = 34;
+static const short kVertWidth   = 40;
+static const short kVertHeight  = 2 + kBtnCount * kBtnStep;
+static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 228, 262, 306, 340, 384 };
 
 // {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 static const GS::Guid s_PaletteGuid ("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
@@ -71,7 +81,7 @@ ProjectCleanerPalette& ProjectCleanerPalette::GetInstance ()
 }
 
 ProjectCleanerPalette::ProjectCleanerPalette ():
-	DG::Palette	(ACAPI_GetOwnResModule (), PAL_RES_ID, ACAPI_GetOwnResModule ()),
+	DG::Palette	(ACAPI_GetOwnResModule (), PAL_RES_ID, ACAPI_GetOwnResModule (), s_PaletteGuid),
 
 	btnScanDeleteViews	(GetReference (), BtnScanDeleteViews),
 	btnScanDeleteLibrary	(GetReference (), BtnScanDeleteLibrary),
@@ -88,13 +98,51 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	this->Attach (*this);
 	AttachToAllItems (*this);
 	this->BeginEventProcessing ();
+
+	// Listen for dock orientation changes so the button row can be rotated
+	// when the palette is docked to the left/right edge.
+	if (DG::Application* app = dynamic_cast<DG::Application*> (GS::Application::GetInstance ()))
+		app->Attach (*this);
 }
 
 ProjectCleanerPalette::~ProjectCleanerPalette ()
 {
+	if (DG::Application* app = dynamic_cast<DG::Application*> (GS::Application::GetInstance ()))
+		app->Detach (*this);
+
 	this->EndEventProcessing ();
 	this->Detach (*this);
 	DetachFromAllItems (*this);
+}
+
+// Re-arranges the icon buttons: a row for the horizontal (top/bottom, floating)
+// layout, a column for the vertical (left/right) docked layout.
+void ProjectCleanerPalette::ApplyDockLayout (bool horizontal)
+{
+	DG::IconButton* buttons[kBtnCount] = {
+		&btnScanDeleteViews, &btnScanDeleteLibrary, &btnScanLayers, &btnMasterLayouts,
+		&btnHatchArea, &btnLineLength, &btnCreateZones, &btnCreateSlabs,
+		&btnDimChain, &btnWallChain, &btnAbout
+	};
+
+	if (horizontal) {
+		for (short i = 0; i < kBtnCount; i++)
+			buttons[i]->SetPosition (kHorizX[i], 1);
+		SetClientSize (kHorizWidth, kHorizHeight);
+	} else {
+		for (short i = 0; i < kBtnCount; i++)
+			buttons[i]->SetPosition (2, (short) (2 + i * kBtnStep));
+		SetClientSize (kVertWidth, kVertHeight);
+	}
+}
+
+bool ProjectCleanerPalette::PaletteDockOrientationChanged (const GS::Guid& paletteGuid, bool isDocked, bool horizontal)
+{
+	if (paletteGuid != s_PaletteGuid)
+		return false;
+
+	ApplyDockLayout (!isDocked || horizontal);
+	return true;
 }
 
 void ProjectCleanerPalette::PanelOpened (const DG::PanelOpenEvent& /*ev*/)

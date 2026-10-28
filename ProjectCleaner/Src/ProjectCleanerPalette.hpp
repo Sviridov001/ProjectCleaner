@@ -3,11 +3,13 @@
 #include "APIEnvir.h"
 #include "ACAPinc.h"
 #include "DGModule.hpp"
+#include "DGApplicationObserver.hpp"
 
 class ProjectCleanerPalette :	public DG::Palette,
 								public DG::PanelObserver,
 								public DG::ButtonItemObserver,
-								public DG::CompoundItemObserver
+								public DG::CompoundItemObserver,
+								public DG::ApplicationObserver
 {
 private:
 	enum {
@@ -50,6 +52,7 @@ public:
 
 private:
 	bool							IsFloorPlanActive ();
+	void							ApplyDockLayout (bool horizontal);
 
 protected:
 	virtual void	PanelOpened (const DG::PanelOpenEvent& ev) override;
@@ -57,4 +60,5 @@ protected:
 	virtual void	PanelToolTipRequested (const DG::PanelHelpEvent& ev, GS::UniString* toolTipText) override;
 	virtual void	ItemToolTipRequested (const DG::ItemHelpEvent& ev, GS::UniString* toolTipText) override;
 	virtual void	ButtonClicked (const DG::ButtonClickEvent& ev) override;
+	virtual bool	PaletteDockOrientationChanged (const GS::Guid& paletteGuid, bool isDocked, bool horizontal) override;
 };

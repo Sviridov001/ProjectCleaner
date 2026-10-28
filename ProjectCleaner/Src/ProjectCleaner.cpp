@@ -139,6 +139,9 @@
 #define RS_WALLCHAIN_NO_SEL	107	// "No parallel walls selected."
 #define RS_WALLCHAIN_CREATED	108	// "Created chains: "
 #define RS_WALLCHAIN_SKIPPED	109	// "Skipped (non-parallel/curved): "
+#define RS_WALLCHAIN_PROMPT	110	// "Place the dimension line:"
+#define RS_WALLCHAIN_FAIL	111	// "Failed to create dimension, error code: "
+#define RS_WALLCHAIN_NOASSOC	112	// "Warning: wall face association was not verified."
 
 // =============================================================================
 // Resource helpers
@@ -1682,9 +1685,36 @@ GSErrCode Do_DimChainWallOpenings (void)
 }
 
 // -----------------------------------------------------------------------------
-// Dimension chain of thicknesses + gaps of selected parallel walls (static chain)
+// Dimension chain of thicknesses + gaps of selected parallel walls (associative)
 // Faces computed from ref line via offsetFromOutside (covers flipped/composite).
+// Each dimension point is bound to a wall face neig (inIndex 11 / 21, see the
+// AssociativeDimensionsOnWallThickness example in the DevKit).
 // -----------------------------------------------------------------------------
+
+// Returns the coordinate of the given neig (best effort, used to identify the
+// neig index of a wall face).
+static bool GetNeigCoord (const API_Guid& guid, API_NeigID neigID, Int32 inIndex, API_Coord* outCoord)
+{
+	API_Neig neig = {};
+	BNZeroMemory (&neig, sizeof (neig));
+	neig.neigID = neigID;
+	neig.guid = guid;
+	neig.inIndex = inIndex;
+
+	API_Coord3D coord3D = {};
+	if (PC_NeigToCoord (&neig, &coord3D) != NoError)
+		return false;
+
+	outCoord->x = coord3D.x;
+	outCoord->y = coord3D.y;
+	return true;
+}
+
+// Distance from a point to the line going through 'pt' with the unit direction (ux, uy)
+static double DistToLine (const API_Coord& coord, const API_Coord& pt, double ux, double uy)
+{
+	return fabs ((coord.x - pt.x) * (-uy) + (coord.y - pt.y) * ux);
+}
 
 GSErrCode Do_WallThicknessChain (void)
 {
@@ -1765,9 +1795,10 @@ GSErrCode Do_WallThicknessChain (void)
 		double t;
 		API_Coord coord;
 		API_Guid wallGuid;
-		char faceSpecial; // 0 = WallOn (reference line side), 1 = WallPlOn (opposite)
+		Int32 inIndex;	// wall face neig index: 11 = reference-line side, 21 = opposite
 	};
 	GS::Array<FaceInfo> faceInfos;
+	UInt32 unverifiedFaces = 0;
 	for (const auto& w : parWalls) {
 		double dx = w.wall.endC.x - w.wall.begC.x;
 		double dy = w.wall.endC.y - w.wall.begC.y;
@@ -1783,11 +1814,37 @@ GSErrCode Do_WallThicknessChain (void)
 		API_Coord pOut, pIn;
 		pOut.x = w.wall.begC.x + nx * s * dOut; pOut.y = w.wall.begC.y + ny * s * dOut;
 		pIn.x  = w.wall.begC.x - nx * s * dIn;  pIn.y  = w.wall.begC.y - ny * s * dIn;
-		// Determine which face is WallOn (reference line side)
-		// Heuristic: reference line is associated with the face it's closer to
-		bool wallOnIsOut = (w.wall.offsetFromOutside <= w.wall.thickness / 2.0);
-		faceInfos.Push ({ tOut, pOut, w.header.guid, wallOnIsOut ? 0 : 1 });
-		faceInfos.Push ({ tIn, pIn, w.header.guid, wallOnIsOut ? 1 : 0 });
+
+		// Identify which neig index belongs to which face. The DevKit example uses
+		// inIndex 11 / 21; the geometric correspondence is verified with the server,
+		// and the default (11 = outside face, 21 = inside face) is the fallback.
+		Int32 idxOut = 11, idxIn = 21;
+		if (fabs (tOut - tIn) > 1e-6) {
+			double bestOut = 1e9, bestIn = 1e9;
+			const Int32  indices[2] = { 11, 21 };
+			const API_NeigID neigIDs[2] = { APINeig_WallOn, APINeig_WallPlOn };
+			bool foundOut = false, foundIn = false;
+			for (Int32 ii = 0; ii < 2; ii++) {
+				for (Int32 ni = 0; ni < 2; ni++) {
+					API_Coord nc = {};
+					if (!GetNeigCoord (w.header.guid, neigIDs[ni], indices[ii], &nc))
+						continue;
+					double distOut = DistToLine (nc, pOut, ux, uy);
+					double distIn  = DistToLine (nc, pIn, ux, uy);
+					const double tol = 1e-3; // 1 mm
+					if (distOut < tol && distOut < bestOut) { bestOut = distOut; idxOut = indices[ii]; foundOut = true; }
+					if (distIn < tol && distIn < bestIn)     { bestIn = distIn;   idxIn  = indices[ii]; foundIn = true; }
+				}
+			}
+			if (!foundOut || !foundIn || idxOut == idxIn) {
+				idxOut = 11;
+				idxIn = 21;
+				unverifiedFaces++;
+			}
+		}
+
+		faceInfos.Push ({ tOut, pOut, w.header.guid, idxOut });
+		faceInfos.Push ({ tIn, pIn, w.header.guid, idxIn });
 	}
 	// Sort faces by t (keep points in sync)
 	for (UInt32 i = 0; i < faceInfos.GetSize (); i++) {
@@ -1797,14 +1854,12 @@ GSErrCode Do_WallThicknessChain (void)
 			}
 		}
 	}
-	// Merge near-duplicates (shared faces) - only if same wall and face type
+	// Merge near-duplicates (shared faces)
 	GS::Array<double> pts;
-	GS::Array<API_Coord> wpts;
 	GS::Array<FaceInfo> faceInfosMerged;
 	for (UInt32 i = 0; i < faceInfos.GetSize (); i++) {
 		if (i == 0 || fabs (faceInfos[i].t - faceInfosMerged[faceInfosMerged.GetSize () - 1].t) > 1e-4) {
 			pts.Push (faceInfos[i].t);
-			wpts.Push (faceInfos[i].coord);
 			faceInfosMerged.Push (faceInfos[i]);
 		}
 	}
@@ -1815,23 +1870,15 @@ GSErrCode Do_WallThicknessChain (void)
 		return NoError;
 	}
 
-	// Dimension line: 1.0 m beyond max face, perpendicular offset along axis
-	const double offset = 1000.0;
-	double tMax = pts[pts.GetSize () - 1];
-	API_Coord refC;
-	// Anchor: witness point of the last face
-	API_Coord anchor = wpts[wpts.GetSize () - 1];
-
-	// Ask the user where to place the dimension line
+	// Dimension line placement: exactly through the clicked point, or 1 m beyond
+	// the average wall center when the user pressed Esc (or input is unavailable).
+	const double fallbackOffset = 1000.0;
+	API_Coord linePoint;	// a point on the dimension line
 	API_Coord clickPos = {};
-	GSErrCode perr = PC_GetPoint ("Укажите положение линии размера", &clickPos, parWalls[0].header.floorInd);
+	GSErrCode perr = PC_GetPoint (GetResString (STR_RES_REPORT, RS_WALLCHAIN_PROMPT), &clickPos, parWalls[0].header.floorInd);
 	if (perr == NoError) {
-		// Shift the dimension line parallel to itself so that it passes through the clicked point
-		double delta = (clickPos.x - anchor.x) * rdx + (clickPos.y - anchor.y) * rdy;
-		anchor.x += delta * rdx;
-		anchor.y += delta * rdy;
+		linePoint = clickPos;
 	} else {
-		// Fixed fallback (Esc or ArchiCAD 26): average center of the selected walls
 		API_Coord avg = { 0.0, 0.0 };
 		for (const auto& w : parWalls) {
 			avg.x += (w.wall.begC.x + w.wall.endC.x) * 0.5;
@@ -1839,23 +1886,27 @@ GSErrCode Do_WallThicknessChain (void)
 		}
 		avg.x /= static_cast<double> (parWalls.GetSize ());
 		avg.y /= static_cast<double> (parWalls.GetSize ());
-		anchor = avg;
+		linePoint.x = avg.x + mx * fallbackOffset;
+		linePoint.y = avg.y + my * fallbackOffset;
 	}
 
-	refC.x = anchor.x + mx * offset;
-	refC.y = anchor.y + my * offset;
-	(void) tMax;
+	API_Coord refC = linePoint;
+	// Projection of the dimension line point on the dimension axis
+	const double tLine = linePoint.x * mx + linePoint.y * my;
 
-UInt32 createdCount = 0;
+	UInt32 createdCount = 0;
 	API_Guid createdGuid = APINULLGuid;
-	err = ACAPI_CallUndoableCommand ("������?�ؐ�� �'�?�>�%��? �?�'��?", [&] () -> GSErrCode {
+	GSErrCode createErr = NoError;
+	err = ACAPI_CallUndoableCommand ("Wall thickness chain", [&] () -> GSErrCode {
 		API_Element element = {};
 		API_ElementMemo memo = {};
 		element.header.type = API_DimensionID;
 		element.header.floorInd = parWalls[0].header.floorInd;
 		element.header.layer = parWalls[0].header.layer;
-		if (ACAPI_Element_GetDefaults (&element, &memo) != NoError)
-			return APIERR_GENERAL;
+		if (ACAPI_Element_GetDefaults (&element, &memo) != NoError) {
+			createErr = APIERR_GENERAL;
+			return createErr;
+		}
 
 		element.dimension.dimAppear = APIApp_Normal;
 		element.dimension.textPos = APIPos_Above;
@@ -1871,7 +1922,8 @@ UInt32 createdCount = 0;
 		memo.dimElems = reinterpret_cast<API_DimElem**> (BMAllocateHandle (element.dimension.nDimElem * sizeof (API_DimElem), ALLOCATE_CLEAR, 0));
 		if (memo.dimElems == nullptr) {
 			ACAPI_DisposeElemMemoHdls (&memo);
-			return APIERR_MEMFULL;
+			createErr = APIERR_MEMFULL;
+			return createErr;
 		}
 
 		for (Int32 i = 0; i < element.dimension.nDimElem; i++) {
@@ -1881,28 +1933,25 @@ UInt32 createdCount = 0;
 			de.note = element.dimension.defNote;
 			de.witnessVal = element.dimension.defWitnessVal;
 			de.witnessForm = element.dimension.defWitnessForm;
-			de.fixedPos = false; // associative
 
-			// Associative base: reference wall face neig
-			de.base.base.type = API_WallID;
+			// Associative base: reference to a wall face neig
+			de.base.base.type = API_ElemType (API_WallID);
 			de.base.base.guid = fi.wallGuid;
-			de.base.base.line = true; // WallOn/WallPlOn are line neigs
-			de.base.base.special = fi.faceSpecial; // 0 = WallOn, 1 = WallPlOn
-			de.base.base.inIndex = 0;
-			de.base.base.guid = fi.wallGuid;
-			de.base.loc = wpts[(UInt32) i]; // fallback coordinate
+			de.base.base.line = true;	// WallOn / WallPlOn are line neigs
+			de.base.base.special = 0;
+			de.base.base.inIndex = fi.inIndex;	// 11 = ref-line side face, 21 = opposite face
 
-			de.fixedPos = false; // position follows the element
-			de.pos.x = anchor.x + mx * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
-			de.pos.y = anchor.y + my * (offset + (pts[(UInt32) i] - pts[pts.GetSize () - 1]));
+			de.fixedPos = false;	// the dimension point follows the referenced wall face
+			de.pos.x = linePoint.x + mx * (fi.t - tLine);
+			de.pos.y = linePoint.y + my * (fi.t - tLine);
 		}
 
-		GSErrCode cerr = ACAPI_Element_Create (&element, &memo);
-		ACAPI_DisposeElemMemoHdls (&memo);
-		if (cerr == NoError) {
+		createErr = ACAPI_Element_Create (&element, &memo);
+		if (createErr == NoError) {
 			createdGuid = element.header.guid;
 			createdCount++;
 		}
+		ACAPI_DisposeElemMemoHdls (&memo);
 		return NoError;
 	});
 
@@ -1911,8 +1960,17 @@ UInt32 createdCount = 0;
 		PC_SelectElement (createdGuid);
 
 	GS::UniString report;
-	report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_CREATED));
-	AppendNumber (report, createdCount);
+	if (createdCount > 0) {
+		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_CREATED));
+		AppendNumber (report, createdCount);
+	} else {
+		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_FAIL));
+		report.Append (GS::UniString::Printf ("%d (0x%X)", (Int32) createErr, (unsigned int) (Int32) createErr));
+	}
+	if (unverifiedFaces > 0 && createdCount > 0) {
+		report.Append ("\n");
+		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_NOASSOC));
+	}
 	if (skippedCount > 0) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_SKIPPED));

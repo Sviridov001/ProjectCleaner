@@ -124,18 +124,29 @@ inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID t
 	return ACAPI_Grouping_GetConnectedElements (guid, API_ElemType (typeID), connectedElements);
 }
 
-inline GSErrCode	PC_GetPoint (const char* prompt, API_Coord* outPos, short /*floorInd*/)
+inline GSErrCode	PC_GetPoint (const GS::UniString& prompt, API_Coord* outPos, short /*floorInd*/)
 {
 	API_GetPointType gp = {};
 	BNZeroMemory (&gp, sizeof (gp));
-	strncpy (gp.prompt, prompt, sizeof (gp.prompt) - 1);
-	// Не задаём changePlane — пусть AC28 использует плоскость активного вида (план этажа)
 
-	API_Coord3D pos = {};
-	GSErrCode err = ACAPI_UserInput_GetPoint (&gp, nullptr, nullptr);
-	if (err == NoError)
-		*outPos = API_Coord { pos.x, pos.y };
+	// API char strings are UTF-8 in ArchiCAD 26+
+	auto promptCStr = prompt.ToCStr (CC_UTF8);
+	strncpy (gp.prompt, promptCStr.Get (), sizeof (gp.prompt) - 1);
+	gp.prompt[sizeof (gp.prompt) - 1] = '\0';
+
+	gp.changeFilter = false;
+	gp.changePlane  = false;	// use the plane of the active floor plan view
+
+	GSErrCode err = ACAPI_UserInput_GetPoint (&gp);
+	if (err == NoError && outPos != nullptr)
+		*outPos = API_Coord { gp.pos.x, gp.pos.y };
+
 	return err;
+}
+
+inline GSErrCode	PC_NeigToCoord (API_Neig* neig, API_Coord3D* coord3D)
+{
+	return ACAPI_Element_NeigToCoord (neig, coord3D);
 }
 
 inline void	PC_DeselectAll (void)
@@ -145,18 +156,30 @@ inline void	PC_DeselectAll (void)
 
 inline void	PC_SelectElement (const API_Guid& guid)
 {
+	// Ask the server for a neig that represents this element;
+	// ACAPI_Selection_Select requires a valid neigID.
 	API_Neig neig = {};
 	BNZeroMemory (&neig, sizeof (neig));
 	neig.guid = guid;
-	// neigID и inIndex не обязательны для выделения по GUID
-	GSErrCode err = ACAPI_Selection_Select (GS::Array<API_Neig> { neig }, false);
-	// Если не вышло — пробуем через SetSelectedElementNeig
-	if (err != NoError) {
-		err = ACAPI_Selection_SetSelectedElementNeig (&guid, &neig);
-		if (err == NoError) {
-			GS::Array<API_Neig> sel; sel.Push (neig);
-			ACAPI_Selection_Select (sel, false);
-		}
+
+	if (ACAPI_Selection_SetSelectedElementNeig (&guid, &neig) == NoError && neig.neigID != APINeig_None) {
+		if (ACAPI_Selection_Select (GS::Array<API_Neig> { neig }, false) == NoError)
+			return;
+	}
+
+	// Fallback: generic neig for the element type
+	API_Elem_Head head = {};
+	head.guid = guid;
+	API_ElemTypeID typeID = API_ZombieElemID;
+	if (ACAPI_Element_GetHeader (&head) == NoError)
+		typeID = head.type.typeID;
+
+	API_NeigID neigID = APINeig_None;
+	if (ACAPI_Element_ElemTypeToNeigID (API_ElemType (typeID), neigID) == NoError && neigID != APINeig_None) {
+		API_Neig fallbackNeig = {};
+		fallbackNeig.neigID = neigID;
+		fallbackNeig.guid = guid;
+		ACAPI_Selection_Select (GS::Array<API_Neig> { fallbackNeig }, false);
 	}
 }
 
@@ -278,9 +301,28 @@ inline GSErrCode	PC_GetConnectedElements (const API_Guid& guid, API_ElemTypeID t
 	return ACAPI_Element_GetConnectedElements (guid, typeID, connectedElements);
 }
 
-inline GSErrCode	PC_GetPoint (const char* /*prompt*/, API_Coord* /*outPos*/, short /*floorInd*/)
+inline GSErrCode	PC_GetPoint (const GS::UniString& prompt, API_Coord* outPos, short /*floorInd*/)
 {
-	return APIERR_GENERAL;
+	API_GetPointType gp = {};
+	BNZeroMemory (&gp, sizeof (gp));
+
+	auto promptCStr = prompt.ToCStr (CC_UTF8);
+	strncpy (gp.prompt, promptCStr.Get (), sizeof (gp.prompt) - 1);
+	gp.prompt[sizeof (gp.prompt) - 1] = '\0';
+
+	gp.changeFilter = false;
+	gp.changePlane  = false;
+
+	GSErrCode err = ACAPI_Interface (APIIo_GetPointID, &gp, nullptr, nullptr);
+	if (err == NoError && outPos != nullptr)
+		*outPos = API_Coord { gp.pos.x, gp.pos.y };
+
+	return err;
+}
+
+inline GSErrCode	PC_NeigToCoord (API_Neig* neig, API_Coord3D* coord3D)
+{
+	return ACAPI_Goodies (APIAny_NeigToCoordID, neig, coord3D, nullptr);
 }
 
 inline void	PC_DeselectAll (void)

@@ -54,8 +54,12 @@ private:
 	bool							IsFloorPlanActive ();
 	void							ApplyDockLayout (bool horizontal);
 
+	bool							pendingLayout = false;
+	bool							pendingHorizontal = true;
+
 protected:
 	virtual void	PanelOpened (const DG::PanelOpenEvent& ev) override;
+	virtual void	PanelIdle (const DG::PanelIdleEvent& ev) override;
 	virtual void	PanelCloseRequested (const DG::PanelCloseRequestEvent& ev, bool* accepted) override;
 	virtual void	PanelToolTipRequested (const DG::PanelHelpEvent& ev, GS::UniString* toolTipText) override;
 	virtual void	ItemToolTipRequested (const DG::ItemHelpEvent& ev, GS::UniString* toolTipText) override;

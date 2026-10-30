@@ -22,12 +22,12 @@ static const short kBtnCount = 11;
 static const short kBtnStep  = 34;
 static const short kHorizWidth  = 420;
 static const short kHorizHeight = 34;
-static const short kVertWidth   = 40;
+static const short kVertWidth   = 48;
 static const short kVertHeight  = 2 + kBtnCount * kBtnStep;
 static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 228, 262, 306, 340, 384 };
 
-// {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
-static const GS::Guid s_PaletteGuid ("A1B2C3D4-E5F6-7890-ABCD-EF1234567890");
+// {6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4}
+static const GS::Guid s_PaletteGuid ("6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4");
 
 const GS::Guid& ProjectCleanerPalette::PaletteGuid ()
 {
@@ -141,8 +141,21 @@ bool ProjectCleanerPalette::PaletteDockOrientationChanged (const GS::Guid& palet
 	if (paletteGuid != s_PaletteGuid)
 		return false;
 
-	ApplyDockLayout (!isDocked || horizontal);
+	// Do not resize the palette inside the docking callback: changing the size
+	// while ArchiCAD is placing the palette cancels the dock operation.
+	// Remember the requested orientation and apply it on the next idle event.
+	pendingHorizontal = (!isDocked || horizontal);
+	pendingLayout = true;
 	return true;
+}
+
+void ProjectCleanerPalette::PanelIdle (const DG::PanelIdleEvent& /*ev*/)
+{
+	if (!pendingLayout)
+		return;
+
+	pendingLayout = false;
+	ApplyDockLayout (pendingHorizontal);
 }
 
 void ProjectCleanerPalette::PanelOpened (const DG::PanelOpenEvent& /*ev*/)

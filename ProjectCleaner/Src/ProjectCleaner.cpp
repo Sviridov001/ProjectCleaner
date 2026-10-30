@@ -142,6 +142,10 @@
 #define RS_WALLCHAIN_PROMPT	110	// "Place the dimension line:"
 #define RS_WALLCHAIN_FAIL	111	// "Failed to create dimension, error code: "
 #define RS_WALLCHAIN_NOASSOC	112	// "Warning: wall face association was not verified."
+#define RS_MEASURE_EMPTY_SEL	113	// "Nothing is selected."
+#define RS_MEASURE_WRONG_WINDOW	114	// "Measurement works on the floor plan, ..."
+#define RS_HATCH_ONLY_MODEL	115	// "Only model parts / drawings are selected, no drawn hatches."
+#define RS_LINE_ONLY_MODEL	116	// "Only model parts / drawings are selected, no drawn lines."
 
 // =============================================================================
 // Resource helpers
@@ -678,6 +682,21 @@ struct HatchGroupData {
 	double	area;		// m²
 };
 
+// Lines are grouped the same way: line type + pen (colour) attribute.
+struct LineGroupKey {
+	API_AttributeIndex	ltypeInd;
+	short				penIndex;
+
+	bool operator== (const LineGroupKey& other) const {
+		return ltypeInd == other.ltypeInd && penIndex == other.penIndex;
+	}
+};
+
+struct LineGroupData {
+	UInt32	count;
+	double	length;		// m
+};
+
 static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double angle, API_Coord& origo)
 {
 	double halfAngle = angle / 2.0;
@@ -814,19 +833,180 @@ static GS::UniString	GetFillName (API_AttributeIndex fillInd)
 	return GS::UniString::Printf ("#%d", PC_AttrToInt (fillInd));
 }
 
+static GS::UniString	GetLineTypeName (API_AttributeIndex ltypeInd)
+{
+	API_Attribute attr;
+	BNZeroMemory (&attr, sizeof (API_Attribute));
+	attr.header.index = ltypeInd;
+	attr.header.typeID = API_LinetypeID;
+	if (ACAPI_Attribute_Get (&attr) == NoError) {
+		if (attr.linetype.head.uniStringNamePtr != nullptr)
+			return *attr.linetype.head.uniStringNamePtr;
+		return GS::UniString (attr.linetype.head.name);
+	}
+	return GS::UniString::Printf ("#%d", PC_AttrToInt (ltypeInd));
+}
+
+// =============================================================================
+// Shared helpers for the measurement commands (hatch area / line length)
+// =============================================================================
+// =============================================================================
+
+// Area / length measurement must work in every 2D drawing database, not only on
+// the floor plan: facades (elevations), sections, interior elevations, details,
+// worksheets, layouts and 3D documents.
+static bool	IsMeasurementDatabaseType (API_WindowTypeID typeID)
+{
+	switch (typeID) {
+		case APIWind_FloorPlanID:
+		case APIWind_SectionID:
+		case APIWind_ElevationID:
+		case APIWind_InteriorElevationID:
+		case APIWind_DetailID:
+		case APIWind_WorksheetID:
+		case APIWind_LayoutID:
+		case APIWind_MasterLayoutID:
+		case APIWind_DocumentFrom3DID:
+			return true;
+		default:
+			return false;
+	}
+}
+
+// The database dependent API calls (selection, element and memo queries) work on
+// the *current database*, which ArchiCAD does not always keep in sync with the
+// active window. In section / elevation / detail / worksheet windows the calls
+// may silently target the floor plan, where the selected GUIDs do not exist.
+// This guard switches the current database to the one behind the active window
+// for the duration of the command and restores the previous one afterwards.
+class MeasurementDatabaseGuard {
+private:
+	API_DatabaseInfo	saved;
+	bool				switched;
+
+public:
+	MeasurementDatabaseGuard ():
+		switched (false)
+	{
+		BNZeroMemory (&saved, sizeof (saved));
+
+		API_WindowInfo windowInfo = {};
+		if (PC_GetCurrentWindow (&windowInfo) != NoError)
+			return;
+
+		if (PC_GetCurrentDatabase (&saved) != NoError)
+			return;
+
+		API_DatabaseInfo target = {};
+		target.typeID = windowInfo.typeID;
+		target.index = windowInfo.index;
+		target.databaseUnId = windowInfo.databaseUnId;
+		target.linkedElement = windowInfo.linkedElement;
+
+		// The floor plan and 3D databases are identified by their type alone;
+		// section / detail / worksheet / layout databases by their unique ID.
+		bool sameDatabase = (saved.typeID == target.typeID);
+		if (sameDatabase &&
+			target.typeID != APIWind_FloorPlanID &&
+			target.typeID != APIWind_3DModelID) {
+			sameDatabase = (saved.databaseUnId == target.databaseUnId);
+		}
+
+		if (!sameDatabase)
+			switched = (PC_ChangeCurrentDatabase (&target) == NoError);
+
+
+	}
+
+	~MeasurementDatabaseGuard ()
+	{
+		Restore ();
+	}
+
+	// Returns to the database that was current before the command. Called
+	// explicitly before any UI (report window) is opened.
+	void	Restore ()
+	{
+		if (!switched)
+			return;
+
+		PC_ChangeCurrentDatabase (&saved);
+		switched = false;
+	}
+
+	bool	WasSwitched () const	{ return switched; }
+};
+
+static void	DisposeSelectionInfo (API_SelectionInfo& selInfo)
+{
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+	selInfo.marquee.coords = nullptr;
+}
+
+static API_ElemTypeID	GetElementTypeID (const API_Guid& guid)
+{
+	API_Elem_Head head = {};
+	head.guid = guid;
+	if (ACAPI_Element_GetHeader (&head) != NoError)
+		return API_ZombieElemID;
+
+	return head.type.typeID;
+}
+
+// APIMemoMask_All is not handled for every element type in every database;
+// fall back to the polygon-only mask, which is all the measurement needs.
+static GSErrCode	GetMeasurementMemo (const API_Guid& guid, API_ElementMemo* memo)
+{
+	BNZeroMemory (memo, sizeof (API_ElementMemo));
+
+	GSErrCode err = ACAPI_Element_GetMemo (guid, memo, APIMemoMask_All);
+	if (err == NoError && memo->coords != nullptr)
+		return NoError;
+
+	ACAPI_DisposeElemMemoHdls (memo);
+	BNZeroMemory (memo, sizeof (API_ElementMemo));
+
+	return ACAPI_Element_GetMemo (guid, memo, APIMemoMask_Polygon);
+}
+
+// A section / elevation window shows the model as section element parts
+// (API_SectElemID); a layout shows placed drawings (API_DrawingID). Neither can
+// be measured, but saying so is much clearer than "no hatches selected".
+static bool	IsModelOrDrawingPart (API_ElemTypeID typeID)
+{
+	return typeID == API_SectElemID ||
+		   typeID == API_DrawingID ||
+		   typeID == API_HotlinkID ||
+		   typeID == API_PictureID;
+}
+
 GSErrCode Do_CalcHatchAreas (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_HATCH_TITLE);
 
-	// 1. Get selection
+	// 0. Only the 2D drawing databases can contain hatches and lines
+	API_WindowInfo windowInfo = {};
+	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsMeasurementDatabaseType (windowInfo.typeID)) {
+
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)), true);
+		return NoError;
+	}
+
+	MeasurementDatabaseGuard dbGuard;
+
+	// 1. Get selection (locked / read-only elements are measured as well)
 	API_SelectionInfo selInfo;
 	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
 	GS::Array<API_Neig> selNeigs;
-	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, false, false, API_InsidePartially);
+
+
+
 	if (err != NoError || selNeigs.IsEmpty ()) {
-		if (selInfo.marquee.coords != nullptr)
-			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL)), true);
+		DisposeSelectionInfo (selInfo);
+		ACAPI_WriteReport (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_HATCH_NO_SEL)), true);
 		return NoError;
 	}
 
@@ -835,6 +1015,8 @@ GSErrCode Do_CalcHatchAreas (void)
 	GS::Array<HatchGroupData> groupData;
 	UInt32 totalHatches = 0;
 	double totalArea = 0.0;
+	UInt32 modelOrDrawingCount = 0;
+	UInt32 unresolvedCount = 0;
 
 	GS::HashSet<API_Guid> seenHatches;
 	for (const API_Neig& neig : selNeigs) {
@@ -842,19 +1024,34 @@ GSErrCode Do_CalcHatchAreas (void)
 			continue;
 		seenHatches.Add (neig.guid);
 
+		const API_ElemTypeID typeID = GetElementTypeID (neig.guid);
+
+		if (typeID == API_ZombieElemID) {
+			unresolvedCount++;
+			continue;
+		}
+		if (typeID != API_HatchID) {
+			if (IsModelOrDrawingPart (typeID))
+				modelOrDrawingCount++;
+			continue;
+		}
+
 		API_Element elem;
 		BNZeroMemory (&elem, sizeof (API_Element));
 		elem.header.guid = neig.guid;
-		if (ACAPI_Element_Get (&elem) != NoError)
+		if (ACAPI_Element_Get (&elem) != NoError) {
+			unresolvedCount++;
 			continue;
+		}
 		if (elem.header.type != API_HatchID)
 			continue;
 
 		API_ElementMemo memo;
-		BNZeroMemory (&memo, sizeof (API_ElementMemo));
-		err = ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_All);
-		if (err != NoError)
+		if (GetMeasurementMemo (neig.guid, &memo) != NoError || memo.coords == nullptr) {
+			ACAPI_DisposeElemMemoHdls (&memo);
+			unresolvedCount++;
 			continue;
+		}
 
 		double hatchArea = CalcPolygonArea (elem.hatch, memo, nullptr);
 		ACAPI_DisposeElemMemoHdls (&memo);
@@ -888,9 +1085,19 @@ GSErrCode Do_CalcHatchAreas (void)
 		totalArea += hatchArea;
 	}
 
+	// The measurement is done; go back to the original database before the
+	// report window is opened.
+	dbGuard.Restore ();
+
 	// 3. Build report
 	if (totalHatches == 0) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL)), true);
+
+		GS::UniString message = GetResString (STR_RES_REPORT, RS_HATCH_NO_SEL);
+		if (modelOrDrawingCount > 0)
+			message = GetResString (STR_RES_REPORT, RS_HATCH_ONLY_MODEL);
+
+		DisposeSelectionInfo (selInfo);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + message), true);
 		return NoError;
 	}
 
@@ -938,8 +1145,8 @@ GSErrCode Do_CalcHatchAreas (void)
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
 	ACAPI_WriteReport (fullReport, true);
 	CopyTextToClipboard (clip);
-	if (selInfo.marquee.coords != nullptr)
-		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+
+	DisposeSelectionInfo (selInfo);
 	return NoError;
 }
 
@@ -1986,52 +2193,92 @@ GSErrCode Do_CalcLineLengths (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_LINE_TITLE);
 
+	// 0. Only the 2D drawing databases can contain hatches and lines
+	API_WindowInfo windowInfo = {};
+	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsMeasurementDatabaseType (windowInfo.typeID)) {
+
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)), true);
+		return NoError;
+	}
+
+	MeasurementDatabaseGuard dbGuard;
+
+	// 1. Get selection (locked / read-only elements are measured as well)
 	API_SelectionInfo selInfo;
 	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
 	GS::Array<API_Neig> selNeigs;
-	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, true, false, API_InsidePartially);
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, false, false, API_InsidePartially);
+
+
+
 	if (err != NoError || selNeigs.IsEmpty ()) {
+		DisposeSelectionInfo (selInfo);
 		ACAPI_WriteReport (FormatSafe (title + "\n" +
-			GetResString (STR_RES_REPORT, RS_LINE_NO_SEL)), true);
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_LINE_NO_SEL)), true);
 		return NoError;
 	}
 
 	double totalLen = 0.0;
 	UInt32 lineCount = 0;
+	UInt32 modelOrDrawingCount = 0;
+	UInt32 unresolvedCount = 0;
+
+	GS::Array<LineGroupKey> groupKeys;
+	GS::Array<LineGroupData> groupData;
 
 	for (const API_Neig& neig : selNeigs) {
+		const API_ElemTypeID typeID = GetElementTypeID (neig.guid);
+
+		if (typeID == API_ZombieElemID) {
+			unresolvedCount++;
+			continue;
+		}
+
+		const bool isMeasurable = (typeID == API_LineID || typeID == API_ArcID ||
+								   typeID == API_CircleID || typeID == API_PolyLineID);
+		if (!isMeasurable) {
+			if (IsModelOrDrawingPart (typeID))
+				modelOrDrawingCount++;
+			continue;
+		}
+
 		API_Element elem;
 		BNZeroMemory (&elem, sizeof (API_Element));
 		elem.header.guid = neig.guid;
-		if (ACAPI_Element_Get (&elem) != NoError)
+		if (ACAPI_Element_Get (&elem) != NoError) {
+			unresolvedCount++;
 			continue;
+		}
 
 		double len = 0.0;
 
-		if (elem.header.type == API_LineID) {
+		// Grouping attributes: line type + effective pen (colour) index
+		API_AttributeIndex ltypeInd = PC_AttrIndex (0);
+		short penIndex = 0;
+
+		if (typeID == API_LineID) {
+			ltypeInd = elem.line.ltypeInd;
+			penIndex = elem.line.linePen.GetEffectiveColorIndex ();
+
 			double dx = elem.line.endC.x - elem.line.begC.x;
 			double dy = elem.line.endC.y - elem.line.begC.y;
 			len = sqrt (dx * dx + dy * dy);
 
-		} else if (elem.header.type == API_ArcID) {
-			double a = elem.arc.r;
-			double b = a * elem.arc.ratio;
-			double dAng;
-			if (elem.arc.whole) {
-				dAng = 2.0 * M_PI;
-			} else {
-				dAng = fabs (elem.arc.endAng - elem.arc.begAng);
-				if (dAng > M_PI)
-					dAng = 2.0 * M_PI - dAng;
-			}
+		} else if (typeID == API_ArcID || typeID == API_CircleID) {
+			ltypeInd = elem.arc.ltypeInd;
+			penIndex = elem.arc.linePen.GetEffectiveColorIndex ();
+
+			// A circle is a full ellipse: same structure, whole range of angle
+			const bool wholeArc = (typeID == API_CircleID) || elem.arc.whole;
+			const double a = elem.arc.r;
+			const double b = a * elem.arc.ratio;
 
 			const Int32 N = 100;
-			double t0 = elem.arc.begAng;
-			double step = (elem.arc.endAng - elem.arc.begAng);
-			if (elem.arc.whole)
-				step = 2.0 * M_PI;
-			else if (fabs (step) > M_PI)
+			const double t0 = wholeArc ? 0.0 : elem.arc.begAng;
+			double step = wholeArc ? 2.0 * M_PI : (elem.arc.endAng - elem.arc.begAng);
+			if (!wholeArc && fabs (step) > M_PI)
 				step = (step > 0) ? -(2.0 * M_PI - fabs (step)) : (2.0 * M_PI - fabs (step));
+
 			double dt = step / N;
 			double sum = 0.0;
 			for (Int32 i = 0; i <= N; i++) {
@@ -2043,10 +2290,12 @@ GSErrCode Do_CalcLineLengths (void)
 			}
 			len = fabs (sum * dt / 3.0);
 
-		} else if (elem.header.type == API_PolyLineID) {
+		} else if (typeID == API_PolyLineID) {
+			ltypeInd = elem.polyLine.ltypeInd;
+			penIndex = elem.polyLine.linePen.GetEffectiveColorIndex ();
+
 			API_ElementMemo memo;
-			BNZeroMemory (&memo, sizeof (API_ElementMemo));
-			if (ACAPI_Element_GetMemo (neig.guid, &memo, APIMemoMask_Polygon) == NoError && memo.coords != nullptr) {
+			if (GetMeasurementMemo (neig.guid, &memo) == NoError && memo.coords != nullptr) {
 				Int32 nCoords = elem.polyLine.poly.nCoords;
 				Int32 nArcs = elem.polyLine.poly.nArcs;
 
@@ -2102,37 +2351,99 @@ GSErrCode Do_CalcLineLengths (void)
 					}
 				}
 				ACAPI_DisposeElemMemoHdls (&memo);
+			} else {
+				ACAPI_DisposeElemMemoHdls (&memo);
+				unresolvedCount++;
 			}
-
-		} else {
-			continue;
 		}
 
 		if (len > 1e-10) {
 			totalLen += len;
 			lineCount++;
+
+			LineGroupKey key;
+			key.ltypeInd = ltypeInd;
+			key.penIndex = penIndex;
+
+			UIndex groupIdx = 0;
+			while (groupIdx < groupKeys.GetSize () && !(groupKeys[groupIdx] == key))
+				groupIdx++;
+
+			if (groupIdx == groupKeys.GetSize ()) {
+				groupKeys.Push (key);
+				LineGroupData data;
+				data.count = 1;
+				data.length = len;
+				groupData.Push (data);
+			} else {
+				groupData[groupIdx].count++;
+				groupData[groupIdx].length += len;
+			}
 		}
 	}
 
+	// The measurement is done; go back to the original database before the
+	// report window is opened.
+	dbGuard.Restore ();
+
 	if (lineCount == 0) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" +
-			GetResString (STR_RES_REPORT, RS_LINE_NO_SEL)), true);
+
+		GS::UniString message = GetResString (STR_RES_REPORT, RS_LINE_NO_SEL);
+		if (modelOrDrawingCount > 0)
+			message = GetResString (STR_RES_REPORT, RS_LINE_ONLY_MODEL);
+
+		DisposeSelectionInfo (selInfo);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + message), true);
 		return NoError;
 	}
 
 	GS::UniString report;
-	report.Append ("- ");
-	report.Append (GS::UniString::Printf ("%d", (int) lineCount));
-	report.Append (" ");
-	report.Append (GetResString (STR_RES_REPORT, RS_LINE_COUNT));
+	GS::UniString clip;		// tab-separated for Excel
+
+	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
+		GS::UniString ltypeName = GetLineTypeName (groupKeys[g].ltypeInd);
+		GS::UniString lenStr = GS::UniString::Printf ("%.3f", groupData[g].length);
+
+		report.Append ("- ");
+		report.Append (ltypeName);
+		report.Append (", ");
+		report.Append (GetResString (STR_RES_REPORT, RS_HATCH_PEN));
+		report.Append (GS::UniString::Printf ("%d", (int) groupKeys[g].penIndex));
+		report.Append (": ");
+		AppendNumber (report, groupData[g].count);
+		report.Append (" шт., ");
+		report.Append (lenStr);
+		report.Append (" м\n");
+
+		clip.Append (ltypeName);
+		clip.Append ("\t");
+		clip.Append (GS::UniString::Printf ("%d", (int) groupKeys[g].penIndex));
+		clip.Append ("\t");
+		AppendNumber (clip, groupData[g].count);
+		clip.Append ("\t");
+		clip.Append (lenStr);
+		clip.Append ("\n");
+	}
+
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_HATCH_TOTAL));
 	report.Append (": ");
-	report.Append (GS::UniString::Printf ("%.3f ", totalLen));
-	report.Append (GetResString (STR_RES_REPORT, RS_LINE_LENGTH));
+	AppendNumber (report, lineCount);
+	report.Append (" шт., ");
+	report.Append (GS::UniString::Printf ("%.3f", totalLen));
+	report.Append (" м");
+
+	clip.Append ("\t\t");
+	AppendNumber (clip, lineCount);
+	clip.Append ("\t");
+	clip.Append (GS::UniString::Printf ("%.3f", totalLen));
 
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
 	ACAPI_WriteReport (fullReport, true);
-	CopyTextToClipboard (GS::UniString::Printf ("%d\t%.3f", (int) lineCount, totalLen));
+	CopyTextToClipboard (clip);
 
+
+	DisposeSelectionInfo (selInfo);
 	return NoError;
 }
 

@@ -97,6 +97,16 @@ inline GSErrCode	PC_GetCurrentWindow (API_WindowInfo* windowInfo)
 	return ACAPI_Window_GetCurrentWindow (windowInfo);
 }
 
+inline GSErrCode	PC_GetCurrentDatabase (API_DatabaseInfo* databaseInfo)
+{
+	return ACAPI_Database_GetCurrentDatabase (databaseInfo);
+}
+
+inline GSErrCode	PC_ChangeCurrentDatabase (API_DatabaseInfo* databaseInfo)
+{
+	return ACAPI_Database_ChangeCurrentDatabase (databaseInfo);
+}
+
 inline GSErrCode	PC_LibPart_Get (API_LibPart* libPart)
 {
 	return ACAPI_LibraryPart_Get (libPart);
@@ -283,7 +293,17 @@ inline GSErrCode	PC_ModifyDatabase (API_DatabaseInfo* databaseInfo)
 
 inline GSErrCode	PC_GetCurrentWindow (API_WindowInfo* windowInfo)
 {
-	return ACAPI_Database (APIDb_GetCurrentWindowID, windowInfo);
+	return ACAPI_Database (APIDb_GetCurrentWindowID, windowInfo, nullptr);
+}
+
+inline GSErrCode	PC_GetCurrentDatabase (API_DatabaseInfo* databaseInfo)
+{
+	return ACAPI_Database (APIDb_GetCurrentDatabaseID, databaseInfo, nullptr);
+}
+
+inline GSErrCode	PC_ChangeCurrentDatabase (API_DatabaseInfo* databaseInfo)
+{
+	return ACAPI_Database (APIDb_ChangeCurrentDatabaseID, databaseInfo, nullptr);
 }
 
 inline GSErrCode	PC_LibPart_Get (API_LibPart* libPart)

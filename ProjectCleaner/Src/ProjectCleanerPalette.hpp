@@ -51,7 +51,9 @@ public:
 	static GSErrCode __ACENV_CALL	PaletteAPIControlCallBack (GS::Int32 referenceID, API_PaletteMessageID messageID, GS::IntPtr param);
 
 private:
+	API_WindowTypeID				GetCurrentWindowType ();
 	bool							IsFloorPlanActive ();
+	bool							IsMeasurementWindowActive ();
 	void							ApplyDockLayout (bool horizontal);
 
 	bool							pendingLayout = false;

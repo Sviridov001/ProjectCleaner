@@ -242,35 +242,81 @@ void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev,
 		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
 }
 
-bool ProjectCleanerPalette::IsFloorPlanActive ()
+API_WindowTypeID ProjectCleanerPalette::GetCurrentWindowType ()
 {
 	API_WindowInfo windowInfo = {};
 	if (PC_GetCurrentWindow (&windowInfo) != NoError)
-		return false;
+		return APIWind_AllID;	// unknown: treat as "nothing is available"
 
-	return windowInfo.typeID == APIWind_FloorPlanID;
+	return windowInfo.typeID;
+}
+
+bool ProjectCleanerPalette::IsFloorPlanActive ()
+{
+	return GetCurrentWindowType () == APIWind_FloorPlanID;
+}
+
+// Area / length measurement works on the floor plan and in every 2D drawing
+// database: sections, elevations, interior elevations, details, worksheets,
+// layouts (annotation drawn directly on the sheet) and 3D documents.
+bool ProjectCleanerPalette::IsMeasurementWindowActive ()
+{
+	switch (GetCurrentWindowType ()) {
+		case APIWind_FloorPlanID:
+		case APIWind_SectionID:
+		case APIWind_ElevationID:
+		case APIWind_InteriorElevationID:
+		case APIWind_DetailID:
+		case APIWind_WorksheetID:
+		case APIWind_LayoutID:
+		case APIWind_MasterLayoutID:
+		case APIWind_DocumentFrom3DID:
+			return true;
+		default:
+			return false;
+	}
 }
 
 void ProjectCleanerPalette::UpdateButtonStates ()
 {
-	bool enabled = IsFloorPlanActive ();
+	const bool plan		= IsFloorPlanActive ();
+	const bool measure	= IsMeasurementWindowActive ();
 
-	btnScanDeleteViews.SetStatus (enabled);
-	btnScanDeleteLibrary.SetStatus (enabled);
-	btnScanLayers.SetStatus (enabled);
-	btnMasterLayouts.SetStatus (enabled);
-	btnHatchArea.SetStatus (enabled);
-	btnLineLength.SetStatus (enabled);
-	btnCreateZones.SetStatus (enabled);
-	btnCreateSlabs.SetStatus (enabled);
-	btnDimChain.SetStatus (enabled);
-	btnWallChain.SetStatus (enabled);
+	// Project cleanup, hatch-to-zone/slab conversion and wall dimensions need
+	// the floor plan database (stories, zones, slabs).
+	btnScanDeleteViews.SetStatus (plan);
+	btnScanDeleteLibrary.SetStatus (plan);
+	btnScanLayers.SetStatus (plan);
+	btnMasterLayouts.SetStatus (plan);
+	btnCreateZones.SetStatus (plan);
+	btnCreateSlabs.SetStatus (plan);
+	btnDimChain.SetStatus (plan);
+	btnWallChain.SetStatus (plan);
+
+	btnHatchArea.SetStatus (measure);
+	btnLineLength.SetStatus (measure);
 	btnAbout.SetStatus (true);
 }
 
 void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 {
-	if (ev.GetSource () != &btnAbout && !IsFloorPlanActive ())
+	if (ev.GetSource () == &btnAbout) {
+		Do_About ();
+		return;
+	}
+
+	if (ev.GetSource () == &btnHatchArea) {
+		if (IsMeasurementWindowActive ())
+			Do_CalcHatchAreas ();
+		return;
+	}
+	if (ev.GetSource () == &btnLineLength) {
+		if (IsMeasurementWindowActive ())
+			Do_CalcLineLengths ();
+		return;
+	}
+
+	if (!IsFloorPlanActive ())
 		return;
 
 	if (ev.GetSource () == &btnScanDeleteViews)
@@ -281,10 +327,6 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_ScanUnusedLayers ();
 	else if (ev.GetSource () == &btnMasterLayouts)
 		Do_ScanUnusedMasterLayouts ();
-	else if (ev.GetSource () == &btnHatchArea)
-		Do_CalcHatchAreas ();
-	else if (ev.GetSource () == &btnLineLength)
-		Do_CalcLineLengths ();
 	else if (ev.GetSource () == &btnCreateZones)
 		Do_CreateZonesFromHatches ();
 	else if (ev.GetSource () == &btnCreateSlabs)
@@ -293,6 +335,4 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 		Do_WallThicknessChain ();
 	else if (ev.GetSource () == &btnDimChain)
 		Do_DimChainWallOpenings ();
-	else if (ev.GetSource () == &btnAbout)
-		Do_About ();
 }

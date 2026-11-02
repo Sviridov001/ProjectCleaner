@@ -18,14 +18,23 @@ extern GSErrCode Do_About (void);
 
 #define PAL_RES_ID 32600
 
-// Icon button geometry: 32x32 buttons with 2 px gaps (matches the GDLG resource)
+// Icon button geometry: 32x32 buttons, 2 px inside a group and 12 px between
+// groups. The groups follow the add-on menu topics:
+//   cleanup (4) | analysis (3) | create (2) | dimensions (2) | service (1)
 static const short kBtnCount = 12;
 static const short kBtnStep  = 34;
+static const short kGroupGap = 12;
 static const short kHorizWidth  = 454;
 static const short kHorizHeight = 34;
 static const short kVertWidth   = 48;
-static const short kVertHeight  = 2 + kBtnCount * kBtnStep;
-static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 228, 262, 306, 340, 384, 418 };
+static const short kVertHeight  = 458;
+static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 218, 262, 296, 340, 374, 418 };
+static const short kVertY[kBtnCount]  = { 2, 36, 70, 104, 150, 184, 218, 264, 298, 344, 378, 424 };
+
+// Vertical separator lines between the groups (same offsets as kHorizX/kVertY)
+static const short kSepCount = 4;
+static const short kHorizSepX[kSepCount] = { 143, 255, 333, 411 };
+static const short kVertSepY[kSepCount]  = { 143, 257, 337, 417 };
 
 // {6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4}
 static const GS::Guid s_PaletteGuid ("6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4");
@@ -90,12 +99,16 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnMasterLayouts	(GetReference (), BtnMasterLayouts),
 	btnHatchArea		(GetReference (), BtnHatchArea),
 	btnLineLength		(GetReference (), BtnLineLength),
+	btnWallVolume		(GetReference (), BtnWallVolume),
 	btnCreateZones		(GetReference (), BtnCreateZones),
 	btnCreateSlabs		(GetReference (), BtnCreateSlabs),
 	btnDimChain			(GetReference (), BtnDimChain),
 	btnWallChain		(GetReference (), BtnWallChain),
 	btnAbout			(GetReference (), BtnAbout),
-	btnWallVolume		(GetReference (), BtnWallVolume)
+	sepGroup1			(GetReference (), 13),
+	sepGroup2			(GetReference (), 14),
+	sepGroup3			(GetReference (), 15),
+	sepGroup4			(GetReference (), 16)
 {
 	this->Attach (*this);
 	AttachToAllItems (*this);
@@ -117,8 +130,9 @@ ProjectCleanerPalette::~ProjectCleanerPalette ()
 	DetachFromAllItems (*this);
 }
 
-// Re-arranges the icon buttons: a row for the horizontal (top/bottom, floating)
-// layout, a column for the vertical (left/right) docked layout.
+// Re-arranges the icon buttons and separators: a row for the horizontal
+// (top/bottom, floating) layout, a column for the vertical (left/right)
+// docked layout. Groups follow the add-on menu topics.
 void ProjectCleanerPalette::ApplyDockLayout (bool horizontal)
 {
 	DG::IconButton* buttons[kBtnCount] = {
@@ -127,13 +141,21 @@ void ProjectCleanerPalette::ApplyDockLayout (bool horizontal)
 		&btnDimChain, &btnWallChain, &btnAbout
 	};
 
+	DG::Separator* seps[kSepCount] = {
+		&sepGroup1, &sepGroup2, &sepGroup3, &sepGroup4
+	};
+
 	if (horizontal) {
 		for (short i = 0; i < kBtnCount; i++)
 			buttons[i]->SetPosition (kHorizX[i], 1);
+		for (short i = 0; i < kSepCount; i++)
+			seps[i]->SetPosition (kHorizSepX[i], 1);
 		SetClientSize (kHorizWidth, kHorizHeight);
 	} else {
 		for (short i = 0; i < kBtnCount; i++)
-			buttons[i]->SetPosition (2, (short) (2 + i * kBtnStep));
+			buttons[i]->SetPosition (2, kVertY[i]);
+		for (short i = 0; i < kSepCount; i++)
+			seps[i]->SetPosition (2, kVertSepY[i]);
 		SetClientSize (kVertWidth, kVertHeight);
 	}
 }

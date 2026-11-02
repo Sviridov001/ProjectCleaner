@@ -4,6 +4,7 @@
 #include "ACAPinc.h"
 #include "DGModule.hpp"
 #include "DGApplicationObserver.hpp"
+#include "DGStaticItem.hpp"
 
 class ProjectCleanerPalette :	public DG::Palette,
 								public DG::PanelObserver,
@@ -39,6 +40,12 @@ private:
 	DG::IconButton	btnDimChain;
 	DG::IconButton	btnWallChain;
 	DG::IconButton	btnAbout;
+
+	// Thin lines between the button groups (same grouping as the add-on menu)
+	DG::Separator	sepGroup1;
+	DG::Separator	sepGroup2;
+	DG::Separator	sepGroup3;
+	DG::Separator	sepGroup4;
 
 	ProjectCleanerPalette ();
 

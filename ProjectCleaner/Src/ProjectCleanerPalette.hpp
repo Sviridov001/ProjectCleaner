@@ -23,7 +23,8 @@ private:
 		BtnCreateSlabs		= 8,
 		BtnDimChain			= 9,
 		BtnWallChain		= 10,
-		BtnAbout			= 11
+		BtnWallVolume		= 11,
+		BtnAbout			= 12
 	};
 
 	DG::IconButton	btnScanDeleteViews;
@@ -36,6 +37,7 @@ private:
 	DG::IconButton	btnCreateSlabs;
 	DG::IconButton	btnDimChain;
 	DG::IconButton	btnWallChain;
+	DG::IconButton	btnWallVolume;
 	DG::IconButton	btnAbout;
 
 	ProjectCleanerPalette ();
@@ -54,6 +56,7 @@ private:
 	API_WindowTypeID				GetCurrentWindowType ();
 	bool							IsFloorPlanActive ();
 	bool							IsMeasurementWindowActive ();
+	bool							IsWallVolumeActive ();
 	void							ApplyDockLayout (bool horizontal);
 
 	bool							pendingLayout = false;

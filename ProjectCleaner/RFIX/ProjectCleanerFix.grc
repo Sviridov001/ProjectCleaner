@@ -51,3 +51,7 @@
 'GICN' 32710 "About" {
 	"PCAbout"
 }
+
+'GICN' 32711 "Calc Wall Volumes" {
+	"PCVolumes"
+}

@@ -9,6 +9,7 @@ extern GSErrCode Do_ScanUnusedLayers (void);
 extern GSErrCode Do_ScanUnusedMasterLayouts (void);
 extern GSErrCode Do_CalcHatchAreas (void);
 extern GSErrCode Do_CalcLineLengths (void);
+extern GSErrCode Do_CalcWallVolumes (void);
 extern GSErrCode Do_CreateZonesFromHatches (void);
 extern GSErrCode Do_CreateSlabsFromHatches (void);
 extern GSErrCode Do_DimChainWallOpenings (void);
@@ -18,13 +19,13 @@ extern GSErrCode Do_About (void);
 #define PAL_RES_ID 32600
 
 // Icon button geometry: 32x32 buttons with 2 px gaps (matches the GDLG resource)
-static const short kBtnCount = 11;
+static const short kBtnCount = 12;
 static const short kBtnStep  = 34;
-static const short kHorizWidth  = 420;
+static const short kHorizWidth  = 454;
 static const short kHorizHeight = 34;
 static const short kVertWidth   = 48;
 static const short kVertHeight  = 2 + kBtnCount * kBtnStep;
-static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 228, 262, 306, 340, 384 };
+static const short kHorizX[kBtnCount] = { 4, 38, 72, 106, 150, 184, 228, 262, 306, 340, 384, 418 };
 
 // {6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4}
 static const GS::Guid s_PaletteGuid ("6B1E4A72-3C58-4D9E-9F27-08B5A1C6D3E4");
@@ -93,6 +94,7 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnCreateSlabs		(GetReference (), BtnCreateSlabs),
 	btnDimChain			(GetReference (), BtnDimChain),
 	btnWallChain		(GetReference (), BtnWallChain),
+	btnWallVolume		(GetReference (), BtnWallVolume),
 	btnAbout			(GetReference (), BtnAbout)
 {
 	this->Attach (*this);
@@ -122,7 +124,7 @@ void ProjectCleanerPalette::ApplyDockLayout (bool horizontal)
 	DG::IconButton* buttons[kBtnCount] = {
 		&btnScanDeleteViews, &btnScanDeleteLibrary, &btnScanLayers, &btnMasterLayouts,
 		&btnHatchArea, &btnLineLength, &btnCreateZones, &btnCreateSlabs,
-		&btnDimChain, &btnWallChain, &btnAbout
+		&btnDimChain, &btnWallChain, &btnWallVolume, &btnAbout
 	};
 
 	if (horizontal) {
@@ -199,8 +201,10 @@ void ProjectCleanerPalette::ItemToolTipRequested (const DG::ItemHelpEvent& ev, G
 		index = 9;
 	else if (item == &btnWallChain)
 		index = 10;
+	else if (item == &btnWallVolume)
+		index = 12;
 	else if (item == &btnAbout)
-		index = 11;
+		index = 13;
 
 	if (index > 0)
 		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
@@ -235,8 +239,10 @@ void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev,
 		index = 9;
 	else if (item == &btnWallChain)
 		index = 10;
+	else if (item == &btnWallVolume)
+		index = 12;
 	else if (item == &btnAbout)
-		index = 11;
+		index = 13;
 
 	if (index > 0)
 		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
@@ -277,6 +283,18 @@ bool ProjectCleanerPalette::IsMeasurementWindowActive ()
 	}
 }
 
+// Wall volume measurement works only on the floor plan and in the 3D model window.
+bool ProjectCleanerPalette::IsWallVolumeActive ()
+{
+	switch (GetCurrentWindowType ()) {
+		case APIWind_FloorPlanID:
+		case APIWind_3DModelID:
+			return true;
+		default:
+			return false;
+	}
+}
+
 void ProjectCleanerPalette::UpdateButtonStates ()
 {
 	const bool plan		= IsFloorPlanActive ();
@@ -295,6 +313,7 @@ void ProjectCleanerPalette::UpdateButtonStates ()
 
 	btnHatchArea.SetStatus (measure);
 	btnLineLength.SetStatus (measure);
+	btnWallVolume.SetStatus (IsWallVolumeActive ());
 	btnAbout.SetStatus (true);
 }
 
@@ -313,6 +332,11 @@ void ProjectCleanerPalette::ButtonClicked (const DG::ButtonClickEvent& ev)
 	if (ev.GetSource () == &btnLineLength) {
 		if (IsMeasurementWindowActive ())
 			Do_CalcLineLengths ();
+		return;
+	}
+	if (ev.GetSource () == &btnWallVolume) {
+		if (IsWallVolumeActive ())
+			Do_CalcWallVolumes ();
 		return;
 	}
 

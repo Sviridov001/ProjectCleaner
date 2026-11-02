@@ -146,6 +146,10 @@
 #define RS_MEASURE_WRONG_WINDOW	114	// "Measurement works on the floor plan, ..."
 #define RS_HATCH_ONLY_MODEL	115	// "Only model parts / drawings are selected, no drawn hatches."
 #define RS_LINE_ONLY_MODEL	116	// "Only model parts / drawings are selected, no drawn lines."
+#define RS_WALL_VOLUME_TITLE	117	// wall volume report title
+#define RS_WALL_VOLUME_NO_SEL	118	// "No walls selected."
+#define RS_WALL_VOLUME_WRONG_WINDOW	119	// "Volume works on floor plan and 3D."
+#define RS_WALL_VOLUME		120	// "Volume, m?"
 
 // =============================================================================
 // Resource helpers
@@ -871,6 +875,76 @@ static bool	IsMeasurementDatabaseType (API_WindowTypeID typeID)
 		default:
 			return false;
 	}
+}
+
+// Wall volume measurement works only on the floor plan and in 3D model windows.
+static bool	IsWallVolumeWindowActive (API_WindowTypeID typeID)
+{
+	return typeID == APIWind_FloorPlanID || typeID == APIWind_3DModelID;
+}
+
+// Build a group key label from the wall's structure type (building material /
+// composite / profile) plus its thickness, e.g. "Сэндвич-панель 150 мм".
+static GS::UniString	GetWallStructureName (const API_WallType& wall)
+{
+	API_Attribute attr;
+	BNZeroMemory (&attr, sizeof (API_Attribute));
+	attr.header.index = PC_AttrIndex (0);	// attribute indices start at 1; 0 means "none"
+
+	switch (wall.modelElemStructureType) {
+		case API_BasicStructure:
+			attr.header.typeID = API_BuildingMaterialID;
+			attr.header.index = wall.buildingMaterial;
+			break;
+		case API_CompositeStructure:
+			attr.header.typeID = API_CompWallID;
+			attr.header.index = wall.composite;
+			break;
+		case API_ProfileStructure:
+			attr.header.typeID = API_ProfileID;
+			attr.header.index = wall.profileAttr;
+			break;
+		default:
+			break;
+	}
+
+	GS::UniString name;
+	if (PC_AttrToInt (attr.header.index) != 0 &&
+		ACAPI_Attribute_Get (&attr) == NoError) {
+		switch (wall.modelElemStructureType) {
+			case API_BasicStructure:
+				if (attr.buildingMaterial.head.uniStringNamePtr != nullptr)
+					name = *attr.buildingMaterial.head.uniStringNamePtr;
+				else
+					name = GS::UniString (attr.buildingMaterial.head.name);
+				break;
+			case API_CompositeStructure:
+				if (attr.compWall.head.uniStringNamePtr != nullptr)
+					name = *attr.compWall.head.uniStringNamePtr;
+				else
+					name = GS::UniString (attr.compWall.head.name);
+				break;
+			case API_ProfileStructure:
+				if (attr.profile.head.uniStringNamePtr != nullptr)
+					name = *attr.profile.head.uniStringNamePtr;
+				else
+					name = GS::UniString (attr.profile.head.name);
+				break;
+			default:
+				break;
+		}
+	}
+	if (name.IsEmpty ())
+		name = GS::UniString::Printf ("#%d", PC_AttrToInt (attr.header.index));
+
+	// Thickness in millimetres, rounded (half up).
+	Int32 thickMm = (Int32) (wall.thickness * 1000.0 + 0.5);
+	if (thickMm <= 0)
+		thickMm = (Int32) (wall.thickness1 * 1000.0 + 0.5);
+	if (thickMm > 0)
+		name = GS::UniString::Printf ("%s %d мм", name.ToCStr ().Get (), thickMm);
+
+	return name;
 }
 
 // The database dependent API calls (selection, element and memo queries) work on
@@ -2447,6 +2521,162 @@ GSErrCode Do_CalcLineLengths (void)
 	return NoError;
 }
 
+// =============================================================================
+// Wall volume calculator
+// =============================================================================
+
+GSErrCode Do_CalcWallVolumes (void)
+{
+	GS::UniString title = GetResString (STR_RES_REPORT, RS_WALL_VOLUME_TITLE);
+
+	// 0. Only the floor plan and the 3D model window contain measurable walls
+	API_WindowInfo windowInfo = {};
+	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsWallVolumeWindowActive (windowInfo.typeID)) {
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_WRONG_WINDOW)), true);
+		return NoError;
+	}
+
+	MeasurementDatabaseGuard dbGuard;
+
+	// 1. Get selection (locked / read-only elements are measured as well)
+	API_SelectionInfo selInfo;
+	BNZeroMemory (&selInfo, sizeof (API_SelectionInfo));
+	GS::Array<API_Neig> selNeigs;
+	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, false, false, API_InsidePartially);
+	if (err != NoError || selNeigs.IsEmpty ()) {
+		DisposeSelectionInfo (selInfo);
+		ACAPI_WriteReport (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_WALL_VOLUME_NO_SEL)), true);
+		return NoError;
+	}
+
+	GS::Array<GS::UniString> groupKeys;
+	GS::Array<UInt32> groupCounts;
+	GS::Array<double> groupVolumes;
+	UInt32 totalWalls = 0;
+	double totalVolume = 0.0;
+	UInt32 unresolvedCount = 0;
+	GS::HashSet<API_Guid> seenWalls;
+
+	for (const API_Neig& neig : selNeigs) {
+		if (seenWalls.Contains (neig.guid))
+			continue;
+		seenWalls.Add (neig.guid);
+
+		const API_ElemTypeID typeID = GetElementTypeID (neig.guid);
+		if (typeID == API_ZombieElemID) {
+			unresolvedCount++;
+			continue;
+		}
+		if (typeID != API_WallID)
+			continue;
+
+		API_Element elem;
+		BNZeroMemory (&elem, sizeof (API_Element));
+		elem.header.guid = neig.guid;
+		if (ACAPI_Element_Get (&elem) != NoError) {
+			unresolvedCount++;
+			continue;
+		}
+
+		// Volume via the ArchiCAD quantity API (accounts for openings / junctions)
+		double volume = 0.0;
+		API_QuantityPar par = {};
+		API_Quantities quantities = {};
+		API_ElementQuantity quantity = {};
+		quantities.elements = &quantity;
+		API_QuantitiesMask mask;
+		ACAPI_ELEMENT_QUANTITY_MASK_CLEAR (mask);
+		ACAPI_ELEMENT_QUANTITY_MASK_SET (mask, wall, volume);
+		par.minOpeningSize = 0.0;
+		if (ACAPI_Element_GetQuantities (neig.guid, &par, &quantities, &mask) == NoError)
+			volume = quantity.wall.volume;
+
+		// Fallback: length × thickness × height
+		if (volume <= 0.0) {
+			API_WallType& w = elem.wall;
+			double dx = w.endC.x - w.begC.x;
+			double dy = w.endC.y - w.begC.y;
+			double len = sqrt (dx * dx + dy * dy);
+			double thick = (w.thickness > 0.0) ? w.thickness : w.thickness1;
+			volume = len * thick * w.height;
+		}
+
+		if (volume <= 0.0)
+			continue;
+
+		GS::UniString key = GetWallStructureName (elem.wall);
+
+		UIndex groupIdx = 0;
+		while (groupIdx < groupKeys.GetSize () && groupKeys[groupIdx] != key)
+			groupIdx++;
+
+		if (groupIdx == groupKeys.GetSize ()) {
+			groupKeys.Push (key);
+			groupCounts.Push (1);
+			groupVolumes.Push (volume);
+		} else {
+			groupCounts[groupIdx]++;
+			groupVolumes[groupIdx] += volume;
+		}
+
+		totalWalls++;
+		totalVolume += volume;
+	}
+
+	// The measurement is done; go back to the original database before the
+	// report window is opened.
+	dbGuard.Restore ();
+
+	if (totalWalls == 0) {
+		DisposeSelectionInfo (selInfo);
+		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_NO_SEL)), true);
+		return NoError;
+	}
+
+	GS::UniString report;
+	GS::UniString clip;		// tab-separated for Excel
+
+	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
+		GS::UniString volStr = GS::UniString::Printf ("%.3f", groupVolumes[g]);
+
+		report.Append ("- ");
+		report.Append (groupKeys[g]);
+		report.Append (": ");
+		AppendNumber (report, groupCounts[g]);
+		report.Append (" шт., ");
+		report.Append (volStr);
+		report.Append (" м³\n");
+
+		clip.Append (groupKeys[g]);
+		clip.Append ("\t");
+		AppendNumber (clip, groupCounts[g]);
+		clip.Append ("\t");
+		clip.Append (volStr);
+		clip.Append ("\n");
+	}
+
+	report.Append ("\n");
+	report.Append (GetResString (STR_RES_REPORT, RS_HATCH_TOTAL));
+	report.Append (": ");
+	AppendNumber (report, totalWalls);
+	report.Append (" шт., ");
+	report.Append (GS::UniString::Printf ("%.3f", totalVolume));
+	report.Append (" м³");
+
+	clip.Append ("\t\t");
+	AppendNumber (clip, totalWalls);
+	clip.Append ("\t");
+	clip.Append (GS::UniString::Printf ("%.3f", totalVolume));
+
+	GS::UniString fullReport = FormatSafe (title + "\n" + report);
+	ACAPI_WriteReport (fullReport, true);
+	CopyTextToClipboard (clip);
+
+	DisposeSelectionInfo (selInfo);
+	return NoError;
+}
+
 GSErrCode Do_ScanUnusedLayers (void)
 {
 	// 1. Collect all layers
@@ -3125,6 +3355,7 @@ GSErrCode __ACENV_CALL	MenuHandler (const API_MenuParams* menuParams)
 		switch (itemIndex) {
 			case 1:		return Do_CalcHatchAreas ();
 			case 2:		return Do_CalcLineLengths ();
+			case 3:		return Do_CalcWallVolumes ();
 			default:	break;
 		}
 	} else if (menuResID == MENU_RES_CREATE) {

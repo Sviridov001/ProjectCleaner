@@ -94,8 +94,8 @@ ProjectCleanerPalette::ProjectCleanerPalette ():
 	btnCreateSlabs		(GetReference (), BtnCreateSlabs),
 	btnDimChain			(GetReference (), BtnDimChain),
 	btnWallChain		(GetReference (), BtnWallChain),
-	btnWallVolume		(GetReference (), BtnWallVolume),
-	btnAbout			(GetReference (), BtnAbout)
+	btnAbout			(GetReference (), BtnAbout),
+	btnWallVolume		(GetReference (), BtnWallVolume)
 {
 	this->Attach (*this);
 	AttachToAllItems (*this);
@@ -123,8 +123,8 @@ void ProjectCleanerPalette::ApplyDockLayout (bool horizontal)
 {
 	DG::IconButton* buttons[kBtnCount] = {
 		&btnScanDeleteViews, &btnScanDeleteLibrary, &btnScanLayers, &btnMasterLayouts,
-		&btnHatchArea, &btnLineLength, &btnCreateZones, &btnCreateSlabs,
-		&btnDimChain, &btnWallChain, &btnWallVolume, &btnAbout
+		&btnHatchArea, &btnLineLength, &btnWallVolume, &btnCreateZones, &btnCreateSlabs,
+		&btnDimChain, &btnWallChain, &btnAbout
 	};
 
 	if (horizontal) {
@@ -193,18 +193,18 @@ void ProjectCleanerPalette::ItemToolTipRequested (const DG::ItemHelpEvent& ev, G
 		index = 5;
 	else if (item == &btnLineLength)
 		index = 6;
-	else if (item == &btnCreateZones)
-		index = 7;
-	else if (item == &btnCreateSlabs)
-		index = 8;
-	else if (item == &btnDimChain)
-		index = 9;
-	else if (item == &btnWallChain)
-		index = 10;
 	else if (item == &btnWallVolume)
-		index = 12;
+		index = 7;
+	else if (item == &btnCreateZones)
+		index = 8;
+	else if (item == &btnCreateSlabs)
+		index = 9;
+	else if (item == &btnDimChain)
+		index = 10;
+	else if (item == &btnWallChain)
+		index = 11;
 	else if (item == &btnAbout)
-		index = 13;
+		index = 12;
 
 	if (index > 0)
 		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());
@@ -231,18 +231,18 @@ void ProjectCleanerPalette::PanelToolTipRequested (const DG::PanelHelpEvent& ev,
 		index = 5;
 	else if (item == &btnLineLength)
 		index = 6;
-	else if (item == &btnCreateZones)
-		index = 7;
-	else if (item == &btnCreateSlabs)
-		index = 8;
-	else if (item == &btnDimChain)
-		index = 9;
-	else if (item == &btnWallChain)
-		index = 10;
 	else if (item == &btnWallVolume)
-		index = 12;
+		index = 7;
+	else if (item == &btnCreateZones)
+		index = 8;
+	else if (item == &btnCreateSlabs)
+		index = 9;
+	else if (item == &btnDimChain)
+		index = 10;
+	else if (item == &btnWallChain)
+		index = 11;
 	else if (item == &btnAbout)
-		index = 13;
+		index = 12;
 
 	if (index > 0)
 		RSGetIndString (toolTipText, TOOLTIP_RES_ID, index, ACAPI_GetOwnResModule ());

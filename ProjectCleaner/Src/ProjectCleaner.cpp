@@ -23,6 +23,7 @@
 
 #include	"ProjectCleanerPalette.hpp"
 #include	"ProjectCleanerCompat.hpp"
+#include	"DGModule.hpp"
 
 // =============================================================================
 // Resource IDs
@@ -175,6 +176,19 @@ static GS::UniString	FormatSafe (const GS::UniString& text)
 	result.ReplaceAll ("%", "%%");
 	return result;
 }
+
+// Forward declarations: helpers are defined after the commands that use them
+static void	ShowInfoAlert (const GS::UniString& text);
+static bool	IsMeasurementDatabaseType (API_WindowTypeID typeID);
+static bool	IsWallVolumeWindowActive (API_WindowTypeID typeID);
+static GS::UniString	GetWallStructureName (const API_WallType& wall);
+static GS::UniString	GetFillName (API_AttributeIndex fillInd);
+static GS::UniString	GetLineTypeName (API_AttributeIndex ltypeInd);
+static API_ElemTypeID	GetElementTypeID (const API_Guid& guid);
+static GSErrCode	GetMeasurementMemo (const API_Guid& guid, API_ElementMemo* memo);
+static bool		IsModelOrDrawingPart (API_ElemTypeID typeID);
+static void		DisposeSelectionInfo (API_SelectionInfo& selInfo);
+static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo& memo, GS::UniString* debugOut);
 
 // =============================================================================
 // Navigator tree helpers
@@ -452,7 +466,7 @@ GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_LIB_TITLE);
 	if (!hasEmbedded) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_LIB_NO_LIBRARY)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_LIB_NO_LIBRARY)));
 		return NoError;
 	}
 
@@ -471,7 +485,7 @@ GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 		report.Append (GetResString (STR_RES_REPORT, RS_LIB_NONE));
 		report.Append ("\n\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_LIB_WARNING));
-		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + report));
 		return NoError;
 	}
 
@@ -490,7 +504,7 @@ GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 	}
 	report.Append ("\n\n");
 	report.Append (GetResString (STR_RES_REPORT, RS_LIB_WARNING));
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 
 	// Confirm delete
 	GS::UniString confirmText = GetResString (STR_RES_REPORT, RS_LIBDEL_COUNT);
@@ -564,7 +578,7 @@ GSErrCode Do_ScanDeleteEmbeddedLibrary (void)
 		result.Append ("\n");
 		result.Append (GetResString (STR_RES_REPORT, RS_LIBDEL_KEPT));
 	}
-	ACAPI_WriteReport (FormatSafe (confirmTitle + "\n" + result), true);
+	ShowInfoAlert (FormatSafe (confirmTitle + "\n" + result));
 	return NoError;
 }
 
@@ -591,7 +605,7 @@ GSErrCode Do_ScanDeleteUnusedViews (void)
 	if (unusedViews.IsEmpty ()) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_NO_PROBLEM));
-		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + report));
 		return NoError;
 	}
 
@@ -608,7 +622,7 @@ GSErrCode Do_ScanDeleteUnusedViews (void)
 		report.Append (GS::UniString (view.uName));
 		listed++;
 	}
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 
 	// Confirm delete
 	GS::UniString confirmText = GetResString (STR_RES_REPORT, RS_DELETE_COUNT);
@@ -646,7 +660,7 @@ GSErrCode Do_ScanDeleteUnusedViews (void)
 		result.Append (GetResString (STR_RES_REPORT, RS_DELETE_ERRORS));
 		AppendNumber (result, failed);
 	}
-	ACAPI_WriteReport (FormatSafe (confirmTitle + "\n" + result), true);
+	ShowInfoAlert (FormatSafe (confirmTitle + "\n" + result));
 	return NoError;
 }
 
@@ -668,8 +682,15 @@ static void	CopyTextToClipboard (const GS::UniString& text)
 	CloseClipboard ();
 }
 
+// Shows a modal info dialog with a custom title instead of the default
+// "Warning" alert produced by ACAPI_WriteReport (..., true).
+static void	ShowInfoAlert (const GS::UniString& text)
+{
+	DG::CustomAlert (0, ACAPI_GetOwnResModule (), "Информация о Элементе", text, GS::UniString (), "OK");
+}
+
 // =============================================================================
-// Hatch area calculator
+// Shared helpers for the measurement commands (hatch area / line length / wall volume)
 // =============================================================================
 
 struct HatchGroupKey {
@@ -686,7 +707,6 @@ struct HatchGroupData {
 	double	area;		// m²
 };
 
-// Lines are grouped the same way: line type + pen (colour) attribute.
 struct LineGroupKey {
 	API_AttributeIndex	ltypeInd;
 	short				penIndex;
@@ -700,6 +720,120 @@ struct LineGroupData {
 	UInt32	count;
 	double	length;		// m
 };
+
+static bool	IsMeasurementDatabaseType (API_WindowTypeID typeID)
+{
+	switch (typeID) {
+		case APIWind_FloorPlanID:
+		case APIWind_SectionID:
+		case APIWind_ElevationID:
+		case APIWind_InteriorElevationID:
+		case APIWind_DetailID:
+		case APIWind_WorksheetID:
+		case APIWind_LayoutID:
+		case APIWind_MasterLayoutID:
+		case APIWind_DocumentFrom3DID:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool	IsWallVolumeWindowActive (API_WindowTypeID typeID)
+{
+	return typeID == APIWind_FloorPlanID || typeID == APIWind_3DModelID;
+}
+
+class MeasurementDatabaseGuard {
+private:
+	API_DatabaseInfo	saved;
+	bool				switched;
+
+public:
+	MeasurementDatabaseGuard ():
+		switched (false)
+	{
+		BNZeroMemory (&saved, sizeof (saved));
+
+		API_WindowInfo windowInfo = {};
+		if (PC_GetCurrentWindow (&windowInfo) != NoError)
+			return;
+
+		if (PC_GetCurrentDatabase (&saved) != NoError)
+			return;
+
+		API_DatabaseInfo target = {};
+		target.typeID = windowInfo.typeID;
+		target.index = windowInfo.index;
+		target.databaseUnId = windowInfo.databaseUnId;
+		target.linkedElement = windowInfo.linkedElement;
+
+		bool sameDatabase = (saved.typeID == target.typeID);
+		if (sameDatabase &&
+			target.typeID != APIWind_FloorPlanID &&
+			target.typeID != APIWind_3DModelID) {
+			sameDatabase = (saved.databaseUnId == target.databaseUnId);
+		}
+
+		if (!sameDatabase)
+			switched = (PC_ChangeCurrentDatabase (&target) == NoError);
+	}
+
+	~MeasurementDatabaseGuard ()
+	{
+		Restore ();
+	}
+
+	void	Restore ()
+	{
+		if (!switched)
+			return;
+
+		PC_ChangeCurrentDatabase (&saved);
+		switched = false;
+	}
+
+	bool	WasSwitched () const	{ return switched; }
+};
+
+static void	DisposeSelectionInfo (API_SelectionInfo& selInfo)
+{
+	if (selInfo.marquee.coords != nullptr)
+		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
+	selInfo.marquee.coords = nullptr;
+}
+
+static API_ElemTypeID	GetElementTypeID (const API_Guid& guid)
+{
+	API_Elem_Head head = {};
+	head.guid = guid;
+	if (ACAPI_Element_GetHeader (&head) != NoError)
+		return API_ZombieElemID;
+
+	return head.type.typeID;
+}
+
+static GSErrCode	GetMeasurementMemo (const API_Guid& guid, API_ElementMemo* memo)
+{
+	BNZeroMemory (memo, sizeof (API_ElementMemo));
+
+	GSErrCode err = ACAPI_Element_GetMemo (guid, memo, APIMemoMask_All);
+	if (err == NoError && memo->coords != nullptr)
+		return NoError;
+
+	ACAPI_DisposeElemMemoHdls (memo);
+	BNZeroMemory (memo, sizeof (API_ElementMemo));
+
+	return ACAPI_Element_GetMemo (guid, memo, APIMemoMask_Polygon);
+}
+
+static bool	IsModelOrDrawingPart (API_ElemTypeID typeID)
+{
+	return typeID == API_SectElemID ||
+		   typeID == API_DrawingID ||
+		   typeID == API_HotlinkID ||
+		   typeID == API_PictureID;
+}
 
 static bool	ArcGetOrigo (const API_Coord& begC, const API_Coord& endC, double angle, API_Coord& origo)
 {
@@ -762,7 +896,6 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 	double totalArea = 0.0;
 	Int32 subPolyStart = 1;
 
-	// First pass: compute area per contour
 	GS::Array<double> contourAreas;
 	GS::Array<Int32> contourStarts, contourEnds;
 	for (Int32 sp = 1; sp <= nSubPolys; sp++) {
@@ -797,14 +930,12 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 		subPolyStart = subPolyEnd + 1;
 	}
 
-	// Second pass: determine add/subtract via point-in-polygon
 	for (Int32 sp = 0; sp < static_cast<Int32>(contourAreas.GetSize ()); sp++) {
-		// Test first vertex of this contour against all previous contours
 		API_Coord testPt = (*memo.coords)[contourStarts[sp]];
 		bool insidePrev = false;
 		for (Int32 prev = 0; prev < sp; prev++) {
 			if (PointInsideContour (testPt, memo, contourStarts[prev], contourEnds[prev])) {
-				insidePrev = !insidePrev;  // XOR: inside odd number of previous = hole
+				insidePrev = !insidePrev;
 			}
 		}
 
@@ -812,12 +943,6 @@ static double	CalcPolygonArea (const API_HatchType& hatch, const API_ElementMemo
 			totalArea -= fabs (contourAreas[sp]);
 		else
 			totalArea += fabs (contourAreas[sp]);
-
-		if (debugOut) {
-			*debugOut += GS::UniString::Printf ("\n  sp%d[%d..%d] raw=%.4f -> %s",
-				(int)(sp + 1), (int)contourStarts[sp], (int)contourEnds[sp],
-				contourAreas[sp], insidePrev ? "SUBTRACT" : "ADD");
-		}
 	}
 
 	return fabs (totalArea);
@@ -851,45 +976,13 @@ static GS::UniString	GetLineTypeName (API_AttributeIndex ltypeInd)
 	return GS::UniString::Printf ("#%d", PC_AttrToInt (ltypeInd));
 }
 
-// =============================================================================
-// Shared helpers for the measurement commands (hatch area / line length)
-// =============================================================================
-// =============================================================================
-
-// Area / length measurement must work in every 2D drawing database, not only on
-// the floor plan: facades (elevations), sections, interior elevations, details,
-// worksheets, layouts and 3D documents.
-static bool	IsMeasurementDatabaseType (API_WindowTypeID typeID)
-{
-	switch (typeID) {
-		case APIWind_FloorPlanID:
-		case APIWind_SectionID:
-		case APIWind_ElevationID:
-		case APIWind_InteriorElevationID:
-		case APIWind_DetailID:
-		case APIWind_WorksheetID:
-		case APIWind_LayoutID:
-		case APIWind_MasterLayoutID:
-		case APIWind_DocumentFrom3DID:
-			return true;
-		default:
-			return false;
-	}
-}
-
-// Wall volume measurement works only on the floor plan and in 3D model windows.
-static bool	IsWallVolumeWindowActive (API_WindowTypeID typeID)
-{
-	return typeID == APIWind_FloorPlanID || typeID == APIWind_3DModelID;
-}
-
 // Build a group key label from the wall's structure type (building material /
 // composite / profile) plus its thickness, e.g. "Сэндвич-панель 150 мм".
 static GS::UniString	GetWallStructureName (const API_WallType& wall)
 {
 	API_Attribute attr;
 	BNZeroMemory (&attr, sizeof (API_Attribute));
-	attr.header.index = PC_AttrIndex (0);	// attribute indices start at 1; 0 means "none"
+	attr.header.index = PC_AttrIndex (0);
 
 	switch (wall.modelElemStructureType) {
 		case API_BasicStructure:
@@ -937,7 +1030,6 @@ static GS::UniString	GetWallStructureName (const API_WallType& wall)
 	if (name.IsEmpty ())
 		name = GS::UniString::Printf ("#%d", PC_AttrToInt (attr.header.index));
 
-	// Thickness in millimetres, rounded (half up).
 	Int32 thickMm = (Int32) (wall.thickness * 1000.0 + 0.5);
 	if (thickMm <= 0)
 		thickMm = (Int32) (wall.thickness1 * 1000.0 + 0.5);
@@ -947,114 +1039,6 @@ static GS::UniString	GetWallStructureName (const API_WallType& wall)
 	return name;
 }
 
-// The database dependent API calls (selection, element and memo queries) work on
-// the *current database*, which ArchiCAD does not always keep in sync with the
-// active window. In section / elevation / detail / worksheet windows the calls
-// may silently target the floor plan, where the selected GUIDs do not exist.
-// This guard switches the current database to the one behind the active window
-// for the duration of the command and restores the previous one afterwards.
-class MeasurementDatabaseGuard {
-private:
-	API_DatabaseInfo	saved;
-	bool				switched;
-
-public:
-	MeasurementDatabaseGuard ():
-		switched (false)
-	{
-		BNZeroMemory (&saved, sizeof (saved));
-
-		API_WindowInfo windowInfo = {};
-		if (PC_GetCurrentWindow (&windowInfo) != NoError)
-			return;
-
-		if (PC_GetCurrentDatabase (&saved) != NoError)
-			return;
-
-		API_DatabaseInfo target = {};
-		target.typeID = windowInfo.typeID;
-		target.index = windowInfo.index;
-		target.databaseUnId = windowInfo.databaseUnId;
-		target.linkedElement = windowInfo.linkedElement;
-
-		// The floor plan and 3D databases are identified by their type alone;
-		// section / detail / worksheet / layout databases by their unique ID.
-		bool sameDatabase = (saved.typeID == target.typeID);
-		if (sameDatabase &&
-			target.typeID != APIWind_FloorPlanID &&
-			target.typeID != APIWind_3DModelID) {
-			sameDatabase = (saved.databaseUnId == target.databaseUnId);
-		}
-
-		if (!sameDatabase)
-			switched = (PC_ChangeCurrentDatabase (&target) == NoError);
-
-
-	}
-
-	~MeasurementDatabaseGuard ()
-	{
-		Restore ();
-	}
-
-	// Returns to the database that was current before the command. Called
-	// explicitly before any UI (report window) is opened.
-	void	Restore ()
-	{
-		if (!switched)
-			return;
-
-		PC_ChangeCurrentDatabase (&saved);
-		switched = false;
-	}
-
-	bool	WasSwitched () const	{ return switched; }
-};
-
-static void	DisposeSelectionInfo (API_SelectionInfo& selInfo)
-{
-	if (selInfo.marquee.coords != nullptr)
-		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-	selInfo.marquee.coords = nullptr;
-}
-
-static API_ElemTypeID	GetElementTypeID (const API_Guid& guid)
-{
-	API_Elem_Head head = {};
-	head.guid = guid;
-	if (ACAPI_Element_GetHeader (&head) != NoError)
-		return API_ZombieElemID;
-
-	return head.type.typeID;
-}
-
-// APIMemoMask_All is not handled for every element type in every database;
-// fall back to the polygon-only mask, which is all the measurement needs.
-static GSErrCode	GetMeasurementMemo (const API_Guid& guid, API_ElementMemo* memo)
-{
-	BNZeroMemory (memo, sizeof (API_ElementMemo));
-
-	GSErrCode err = ACAPI_Element_GetMemo (guid, memo, APIMemoMask_All);
-	if (err == NoError && memo->coords != nullptr)
-		return NoError;
-
-	ACAPI_DisposeElemMemoHdls (memo);
-	BNZeroMemory (memo, sizeof (API_ElementMemo));
-
-	return ACAPI_Element_GetMemo (guid, memo, APIMemoMask_Polygon);
-}
-
-// A section / elevation window shows the model as section element parts
-// (API_SectElemID); a layout shows placed drawings (API_DrawingID). Neither can
-// be measured, but saying so is much clearer than "no hatches selected".
-static bool	IsModelOrDrawingPart (API_ElemTypeID typeID)
-{
-	return typeID == API_SectElemID ||
-		   typeID == API_DrawingID ||
-		   typeID == API_HotlinkID ||
-		   typeID == API_PictureID;
-}
-
 GSErrCode Do_CalcHatchAreas (void)
 {
 	GS::UniString title = GetResString (STR_RES_REPORT, RS_HATCH_TITLE);
@@ -1062,8 +1046,7 @@ GSErrCode Do_CalcHatchAreas (void)
 	// 0. Only the 2D drawing databases can contain hatches and lines
 	API_WindowInfo windowInfo = {};
 	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsMeasurementDatabaseType (windowInfo.typeID)) {
-
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)));
 		return NoError;
 	}
 
@@ -1075,12 +1058,10 @@ GSErrCode Do_CalcHatchAreas (void)
 	GS::Array<API_Neig> selNeigs;
 	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, false, false, API_InsidePartially);
 
-
-
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" +
-			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_HATCH_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_HATCH_NO_SEL)));
 		return NoError;
 	}
 
@@ -1171,7 +1152,7 @@ GSErrCode Do_CalcHatchAreas (void)
 			message = GetResString (STR_RES_REPORT, RS_HATCH_ONLY_MODEL);
 
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + message), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + message));
 		return NoError;
 	}
 
@@ -1217,7 +1198,7 @@ GSErrCode Do_CalcHatchAreas (void)
 	clip.Append (GS::UniString::Printf ("%.2f", totalArea));
 
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
-	ACAPI_WriteReport (fullReport, true);
+	ShowInfoAlert (fullReport);
 	CopyTextToClipboard (clip);
 
 	DisposeSelectionInfo (selInfo);
@@ -1321,7 +1302,7 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 	// Step 7: Create
 	err = ACAPI_Element_Create (&element, &memo);
 	if (err != NoError) {
-		ACAPI_WriteReport (GS::UniString::Printf ("Create err=%d", (int) err), true);
+		ShowInfoAlert (GS::UniString::Printf ("Create err=%d", (int) err));
 	}
 
 	ACAPI_DisposeElemMemoHdls (&memo);
@@ -1340,7 +1321,7 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 		if (err != NoError || selNeigs.IsEmpty ()) {
 			if (selInfo.marquee.coords != nullptr)
 				BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
+			ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)));
 			return NoError;
 		}
 
@@ -1399,7 +1380,7 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 		if (createdCount == 0 && failCount == 0) {
 			if (selInfo.marquee.coords != nullptr)
 				BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-			ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)), true);
+			ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_ZONE_NO_SEL)));
 			return NoError;
 		}
 
@@ -1412,7 +1393,7 @@ static GSErrCode	CreateZoneFromHatchPoly (API_Coord** srcCoords, Int32** srcPend
 			AppendNumber (report, failCount);
 		}
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 	if (selInfo.marquee.coords != nullptr)
 		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
@@ -1507,7 +1488,7 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)));
 		return NoError;
 	}
 
@@ -1552,7 +1533,7 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 	if (createdCount == 0 && failCount == 0) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_SLAB_NO_SEL)));
 		return NoError;
 	}
 	GS::UniString report;
@@ -1563,7 +1544,7 @@ GSErrCode Do_CreateSlabsFromHatches (void)
 		report.Append (GetResString (STR_RES_REPORT, RS_SLAB_FAIL));
 		AppendNumber (report, failCount);
 	}
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 	if (selInfo.marquee.coords != nullptr)
 		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
@@ -1832,7 +1813,7 @@ GSErrCode Do_DimChainWallOpenings (void)
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -1854,7 +1835,7 @@ GSErrCode Do_DimChainWallOpenings (void)
 	if (walls.IsEmpty ()) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_DIMCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -1959,7 +1940,7 @@ GSErrCode Do_DimChainWallOpenings (void)
 		report.Append (GetResString (STR_RES_REPORT, RS_DIMCHAIN_SKIPPED));
 		AppendNumber (report, skippedCount);
 	}
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 	if (selInfo.marquee.coords != nullptr)
 		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
@@ -2008,7 +1989,7 @@ GSErrCode Do_WallThicknessChain (void)
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -2039,7 +2020,7 @@ GSErrCode Do_WallThicknessChain (void)
 	if (walls.GetSize () < 2) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -2065,7 +2046,7 @@ GSErrCode Do_WallThicknessChain (void)
 	if (parWalls.GetSize () < 2) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -2147,7 +2128,7 @@ GSErrCode Do_WallThicknessChain (void)
 	if (pts.GetSize () < 2) {
 		if (selInfo.marquee.coords != nullptr)
 			BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALLCHAIN_NO_SEL)));
 		return NoError;
 	}
 
@@ -2257,7 +2238,7 @@ GSErrCode Do_WallThicknessChain (void)
 		report.Append (GetResString (STR_RES_REPORT, RS_WALLCHAIN_SKIPPED));
 		AppendNumber (report, skippedCount);
 	}
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 	if (selInfo.marquee.coords != nullptr)
 		BMKillHandle ((GSHandle*) &selInfo.marquee.coords);
 	return NoError;
@@ -2271,7 +2252,7 @@ GSErrCode Do_CalcLineLengths (void)
 	API_WindowInfo windowInfo = {};
 	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsMeasurementDatabaseType (windowInfo.typeID)) {
 
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_MEASURE_WRONG_WINDOW)));
 		return NoError;
 	}
 
@@ -2287,8 +2268,8 @@ GSErrCode Do_CalcLineLengths (void)
 
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" +
-			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_LINE_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_LINE_NO_SEL)));
 		return NoError;
 	}
 
@@ -2467,7 +2448,7 @@ GSErrCode Do_CalcLineLengths (void)
 			message = GetResString (STR_RES_REPORT, RS_LINE_ONLY_MODEL);
 
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + message), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + message));
 		return NoError;
 	}
 
@@ -2513,7 +2494,7 @@ GSErrCode Do_CalcLineLengths (void)
 	clip.Append (GS::UniString::Printf ("%.3f", totalLen));
 
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
-	ACAPI_WriteReport (fullReport, true);
+	ShowInfoAlert (fullReport);
 	CopyTextToClipboard (clip);
 
 
@@ -2532,7 +2513,7 @@ GSErrCode Do_CalcWallVolumes (void)
 	// 0. Only the floor plan and the 3D model window contain measurable walls
 	API_WindowInfo windowInfo = {};
 	if (PC_GetCurrentWindow (&windowInfo) != NoError || !IsWallVolumeWindowActive (windowInfo.typeID)) {
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_WRONG_WINDOW)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_WRONG_WINDOW)));
 		return NoError;
 	}
 
@@ -2545,16 +2526,20 @@ GSErrCode Do_CalcWallVolumes (void)
 	GSErrCode err = ACAPI_Selection_Get (&selInfo, &selNeigs, false, false, API_InsidePartially);
 	if (err != NoError || selNeigs.IsEmpty ()) {
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" +
-			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_WALL_VOLUME_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" +
+			GetResString (STR_RES_REPORT, selNeigs.IsEmpty () ? RS_MEASURE_EMPTY_SEL : RS_WALL_VOLUME_NO_SEL)));
 		return NoError;
 	}
 
 	GS::Array<GS::UniString> groupKeys;
 	GS::Array<UInt32> groupCounts;
 	GS::Array<double> groupVolumes;
+	GS::Array<double> groupAreasWith;		// area with openings (surface1 from API)
+	GS::Array<double> groupAreasWithout;	// area without openings (length × height)
 	UInt32 totalWalls = 0;
 	double totalVolume = 0.0;
+	double totalAreaWith = 0.0;
+	double totalAreaWithout = 0.0;
 	UInt32 unresolvedCount = 0;
 	GS::HashSet<API_Guid> seenWalls;
 
@@ -2579,8 +2564,15 @@ GSErrCode Do_CalcWallVolumes (void)
 			continue;
 		}
 
+		API_WallType& w = elem.wall;
+		double dx = w.endC.x - w.begC.x;
+		double dy = w.endC.y - w.begC.y;
+		double len = sqrt (dx * dx + dy * dy);
+		double areaWithout = len * w.height;	// gross area of one long face, no openings
+
 		// Volume via the ArchiCAD quantity API (accounts for openings / junctions)
 		double volume = 0.0;
+		double areaWith = 0.0;
 		API_QuantityPar par = {};
 		API_Quantities quantities = {};
 		API_ElementQuantity quantity = {};
@@ -2588,19 +2580,19 @@ GSErrCode Do_CalcWallVolumes (void)
 		API_QuantitiesMask mask;
 		ACAPI_ELEMENT_QUANTITY_MASK_CLEAR (mask);
 		ACAPI_ELEMENT_QUANTITY_MASK_SET (mask, wall, volume);
+		ACAPI_ELEMENT_QUANTITY_MASK_SET (mask, wall, surface1);
 		par.minOpeningSize = 0.0;
-		if (ACAPI_Element_GetQuantities (neig.guid, &par, &quantities, &mask) == NoError)
+		bool quantitiesOk = (ACAPI_Element_GetQuantities (neig.guid, &par, &quantities, &mask) == NoError);
+		if (quantitiesOk) {
 			volume = quantity.wall.volume;
+			areaWith = quantity.wall.surface1;	// one long face, openings already subtracted
+		}
 
 		// Fallback: length × thickness × height
-		if (volume <= 0.0) {
-			API_WallType& w = elem.wall;
-			double dx = w.endC.x - w.begC.x;
-			double dy = w.endC.y - w.begC.y;
-			double len = sqrt (dx * dx + dy * dy);
-			double thick = (w.thickness > 0.0) ? w.thickness : w.thickness1;
-			volume = len * thick * w.height;
-		}
+		if (volume <= 0.0)
+			volume = len * ((w.thickness > 0.0) ? w.thickness : w.thickness1) * w.height;
+		if (areaWith <= 0.0)
+			areaWith = areaWithout;	// no API data: treat as no openings
 
 		if (volume <= 0.0)
 			continue;
@@ -2615,13 +2607,19 @@ GSErrCode Do_CalcWallVolumes (void)
 			groupKeys.Push (key);
 			groupCounts.Push (1);
 			groupVolumes.Push (volume);
+			groupAreasWith.Push (areaWith);
+			groupAreasWithout.Push (areaWithout);
 		} else {
 			groupCounts[groupIdx]++;
 			groupVolumes[groupIdx] += volume;
+			groupAreasWith[groupIdx] += areaWith;
+			groupAreasWithout[groupIdx] += areaWithout;
 		}
 
 		totalWalls++;
 		totalVolume += volume;
+		totalAreaWith += areaWith;
+		totalAreaWithout += areaWithout;
 	}
 
 	// The measurement is done; go back to the original database before the
@@ -2630,7 +2628,7 @@ GSErrCode Do_CalcWallVolumes (void)
 
 	if (totalWalls == 0) {
 		DisposeSelectionInfo (selInfo);
-		ACAPI_WriteReport (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_NO_SEL)), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + GetResString (STR_RES_REPORT, RS_WALL_VOLUME_NO_SEL)));
 		return NoError;
 	}
 
@@ -2639,6 +2637,8 @@ GSErrCode Do_CalcWallVolumes (void)
 
 	for (UIndex g = 0; g < groupKeys.GetSize (); g++) {
 		GS::UniString volStr = GS::UniString::Printf ("%.3f", groupVolumes[g]);
+		GS::UniString areaWithStr = GS::UniString::Printf ("%.3f", groupAreasWith[g]);
+		GS::UniString areaWithoutStr = GS::UniString::Printf ("%.3f", groupAreasWithout[g]);
 
 		report.Append ("- ");
 		report.Append (groupKeys[g]);
@@ -2646,13 +2646,21 @@ GSErrCode Do_CalcWallVolumes (void)
 		AppendNumber (report, groupCounts[g]);
 		report.Append (" шт., ");
 		report.Append (volStr);
-		report.Append (" м³\n");
+		report.Append (" м³, площадь ");
+		report.Append (areaWithStr);
+		report.Append (" м² (с проемами), ");
+		report.Append (areaWithoutStr);
+		report.Append (" м² (без проема)\n");
 
 		clip.Append (groupKeys[g]);
 		clip.Append ("\t");
 		AppendNumber (clip, groupCounts[g]);
 		clip.Append ("\t");
 		clip.Append (volStr);
+		clip.Append ("\t");
+		clip.Append (areaWithStr);
+		clip.Append ("\t");
+		clip.Append (areaWithoutStr);
 		clip.Append ("\n");
 	}
 
@@ -2662,15 +2670,23 @@ GSErrCode Do_CalcWallVolumes (void)
 	AppendNumber (report, totalWalls);
 	report.Append (" шт., ");
 	report.Append (GS::UniString::Printf ("%.3f", totalVolume));
-	report.Append (" м³");
+	report.Append (" м³, площадь ");
+	report.Append (GS::UniString::Printf ("%.3f", totalAreaWith));
+	report.Append (" м² (с проемами), ");
+	report.Append (GS::UniString::Printf ("%.3f", totalAreaWithout));
+	report.Append (" м² (без проема)");
 
 	clip.Append ("\t\t");
 	AppendNumber (clip, totalWalls);
 	clip.Append ("\t");
 	clip.Append (GS::UniString::Printf ("%.3f", totalVolume));
+	clip.Append ("\t");
+	clip.Append (GS::UniString::Printf ("%.3f", totalAreaWith));
+	clip.Append ("\t");
+	clip.Append (GS::UniString::Printf ("%.3f", totalAreaWithout));
 
 	GS::UniString fullReport = FormatSafe (title + "\n" + report);
-	ACAPI_WriteReport (fullReport, true);
+	ShowInfoAlert (fullReport);
 	CopyTextToClipboard (clip);
 
 	DisposeSelectionInfo (selInfo);
@@ -2683,7 +2699,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 	UInt32 layerCount = 0;
 	GSErrCode err = PC_Attribute_GetNum (API_LayerID, &layerCount);
 	if (err != NoError || layerCount == 0) {
-		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+		ShowInfoAlert (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)));
 		return NoError;
 	}
 
@@ -2780,7 +2796,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 	if (unusedLayers.IsEmpty ()) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_LAYER_NONE));
-		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + report));
 		return NoError;
 	}
 
@@ -2802,7 +2818,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 		listed++;
 	}
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 
 	// 5. Dialog: rename or just report?
 	GS::UniString dlgMsg = GetResString (STR_RES_REPORT, RS_LAYER_PROMPT_MSG);
@@ -2858,7 +2874,7 @@ GSErrCode Do_ScanUnusedLayers (void)
 		AppendNumber (result, failCount);
 	}
 
-	ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE) + "\n" + result), true);
+	ShowInfoAlert (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE) + "\n" + result));
 	return NoError;
 }
 
@@ -2868,7 +2884,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 	GS::Array<API_DatabaseUnId> masterLayouts;
 	GSErrCode err = PC_GetMasterLayoutDatabases (&masterLayouts);
 	if (err != NoError || masterLayouts.IsEmpty ()) {
-		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_NONE)), true);
+		ShowInfoAlert (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_NONE)));
 		return NoError;
 	}
 
@@ -2939,7 +2955,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 	if (unusedMasters.IsEmpty ()) {
 		report.Append ("\n");
 		report.Append (GetResString (STR_RES_REPORT, RS_MASTER_NONE));
-		ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+		ShowInfoAlert (FormatSafe (title + "\n" + report));
 		return NoError;
 	}
 
@@ -2957,7 +2973,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 		listed++;
 	}
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 
 	// 5. Dialog: rename or just report?
 	GS::UniString dlgMsg = GetResString (STR_RES_REPORT, RS_MASTER_PROMPT_MSG);
@@ -3085,7 +3101,7 @@ GSErrCode Do_ScanUnusedMasterLayouts (void)
 			result.Append (details);
 	}
 
-	ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_RENAME_TITLE) + "\n" + result), true);
+	ShowInfoAlert (FormatSafe (GetResString (STR_RES_REPORT, RS_MASTER_RENAME_TITLE) + "\n" + result));
 	return NoError;
 }
 
@@ -3095,7 +3111,7 @@ GSErrCode Do_DeleteUnusedLayers (void)
 	UInt32 layerCount = 0;
 	GSErrCode err = PC_Attribute_GetNum (API_LayerID, &layerCount);
 	if (err != NoError || layerCount == 0) {
-		ACAPI_WriteReport (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+		ShowInfoAlert (FormatSafe (GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)));
 		return NoError;
 	}
 
@@ -3168,9 +3184,9 @@ GSErrCode Do_DeleteUnusedLayers (void)
 	}
 
 	if (unusedLayers.IsEmpty ()) {
-		ACAPI_WriteReport (FormatSafe (
+		ShowInfoAlert (FormatSafe (
 			GetResString (STR_RES_REPORT, RS_LAYERDEL_TITLE) + "\n" +
-			GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)), true);
+			GetResString (STR_RES_REPORT, RS_LAYERDEL_NOTHING)));
 		return NoError;
 	}
 
@@ -3212,7 +3228,7 @@ GSErrCode Do_DeleteUnusedLayers (void)
 		AppendNumber (result, failCount);
 	}
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + result), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + result));
 	return NoError;
 }
 
@@ -3307,7 +3323,7 @@ GSErrCode Do_ProjectStats (void)
 		AppendNumber (report, layerCount);
 	}
 
-	ACAPI_WriteReport (FormatSafe (title + "\n" + report), true);
+	ShowInfoAlert (FormatSafe (title + "\n" + report));
 	return NoError;
 }
 

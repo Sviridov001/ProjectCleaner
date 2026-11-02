@@ -19,11 +19,11 @@ private:
 		BtnMasterLayouts	= 4,
 		BtnHatchArea		= 5,
 		BtnLineLength		= 6,
-		BtnCreateZones		= 7,
-		BtnCreateSlabs		= 8,
-		BtnDimChain			= 9,
-		BtnWallChain		= 10,
-		BtnWallVolume		= 11,
+		BtnWallVolume		= 7,
+		BtnCreateZones		= 8,
+		BtnCreateSlabs		= 9,
+		BtnDimChain			= 10,
+		BtnWallChain		= 11,
 		BtnAbout			= 12
 	};
 
@@ -33,11 +33,11 @@ private:
 	DG::IconButton	btnMasterLayouts;
 	DG::IconButton	btnHatchArea;
 	DG::IconButton	btnLineLength;
+	DG::IconButton	btnWallVolume;
 	DG::IconButton	btnCreateZones;
 	DG::IconButton	btnCreateSlabs;
 	DG::IconButton	btnDimChain;
 	DG::IconButton	btnWallChain;
-	DG::IconButton	btnWallVolume;
 	DG::IconButton	btnAbout;
 
 	ProjectCleanerPalette ();
